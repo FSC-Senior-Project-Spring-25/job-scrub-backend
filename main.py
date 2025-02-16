@@ -16,6 +16,7 @@ load_dotenv()
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index = pc.Index("job-postings")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Register app with FastAPI Injectable
@@ -23,14 +24,14 @@ async def lifespan(app: FastAPI):
 
     # Initialize embedder and job service
     app.state.embedder = TextEmbedder()
-    app.state.job_service = JobPostingService(app.state.embedder)
+    app.state.job_service = JobPostingService(app.state.embedder, index)
 
     yield
     # Cleanup resources
     del app.state.embedder
     del app.state.job_service
-    del app.state.index
     await cleanup_all_exit_stacks()
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -43,6 +44,10 @@ async def root():
     return {"message": "Hello World"}
 
 
-@app.get("/hello/{name}")
-async def say_hello(name: str):
-    return {"message": f"Hello {name}"}
+@app.post("/job/report")
+async def create_job_report(report: JobReport, job_service: JobPostingService = Depends(get_job_service)):
+    try:
+        id = await job_service.post_job(report)
+        return {"message": "Job report created successfully with ID: " + id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
