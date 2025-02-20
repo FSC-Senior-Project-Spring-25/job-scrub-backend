@@ -1,5 +1,6 @@
-import torch
 from transformers import AutoTokenizer, AutoModel
+import torch
+import numpy as np
 
 
 class TextEmbedder:
@@ -22,19 +23,44 @@ class TextEmbedder:
 
         # Get embeddings from the last hidden state
         embeddings = outputs.last_hidden_state[:, 0]
-        return embeddings
 
-    def compute_similarity(self, texts1: list[str], texts2: list[str]):
-        """
-        Compute the cosine similarity between two sets of texts
+        # Normalize embeddings to unit length (L2 norm)
+        normalized_embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
+        return normalized_embeddings
 
-        :return: a similarity matrix of shape (len(texts1), len(texts2))
+    def compute_similarity(self, texts1: list[str], texts2: list[str]) -> torch.Tensor:
         """
-        # Get embeddings for both sets of texts
+        Compute the adjusted similarity between two sets of texts
+        :return: a similarity matrix with rescaled values between -1 and 1
+        """
+        # Get normalized embeddings for both sets of texts
         embeddings1 = self.get_embeddings(texts1)
         embeddings2 = self.get_embeddings(texts2)
 
-        # Calculate cosine similarity matrix
-        similarity = embeddings1 @ embeddings2.T
+        # Calculate cosine similarity
+        similarity = torch.mm(embeddings1, embeddings2.T)
 
-        return similarity
+        # Apply scaling to better distribute similarity scores
+        # This transforms the typical BGE similarity range (0.6-0.9) to a more interpretable range
+        scaled_similarity = self._rescale_similarity(similarity)
+
+        return scaled_similarity
+
+    @staticmethod
+    def _rescale_similarity(similarity: torch.Tensor) -> torch.Tensor:
+        """
+        Rescale the similarity scores to better reflect semantic relationships
+        """
+        sim_np = similarity.numpy()
+
+        # Define the typical range of BGE similarities for scaling
+        typical_min = 0.6  # Typical minimum similarity from BGE
+        typical_max = 0.9  # Typical maximum similarity from BGE
+
+        # Rescale to [-1, 1] range
+        rescaled = (sim_np - typical_min) / (typical_max - typical_min) * 2 - 1
+
+        # Clip values to ensure they stay in [-1, 1]
+        rescaled = np.clip(rescaled, -1, 1)
+
+        return torch.from_numpy(rescaled)
