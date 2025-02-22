@@ -1,15 +1,19 @@
 import os
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
 from pinecone import Pinecone
 
 from context import RequestContextMiddleware
-from dependencies import get_job_service
+from dependencies import get_job_service, get_resume_agent
 from models.job_report import JobReport
+from services.agents.resume_matcher import ResumeMatchingAgent
+from services.gemini import GeminiLLM
 from services.jobs_posting import JobPostingService
+from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
 load_dotenv()
@@ -22,14 +26,25 @@ async def lifespan(app: FastAPI):
     # Register app with FastAPI Injectable
     await register_app(app)
 
-    # Initialize embedder and job service
-    app.state.embedder = TextEmbedder()
-    app.state.job_service = JobPostingService(app.state.embedder, index)
+    # Initialize dependencies
+    embedder = TextEmbedder()
+    job_posting_service = JobPostingService(embedder, index)
+
+    resume_parser = ResumeParser()
+    gemini_llm = GeminiLLM()
+    resume_matching_agent = ResumeMatchingAgent(
+        resume_parser=resume_parser,
+        text_embedder=embedder,
+        llm=gemini_llm,
+    )
+
+    app.state.embedder = embedder
+    app.state.job_service = job_posting_service
+    app.state.gemini_llm = gemini_llm
+    app.state.resume_agent = resume_matching_agent
 
     yield
     # Cleanup resources
-    del app.state.embedder
-    del app.state.job_service
     await cleanup_all_exit_stacks()
 
 
