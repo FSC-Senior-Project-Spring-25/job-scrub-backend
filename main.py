@@ -51,3 +51,35 @@ async def create_job_report(report: JobReport, job_service: JobPostingService = 
         return {"message": "Job report created successfully with ID: " + id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/resume/match")
+async def calculate_resume_similarity(
+        resume_file: Annotated[UploadFile, File(alias="resumeFile", validation_alias="resumeFile")],
+        job_description: str = Form(
+            ...,
+            alias="jobDescription",
+            validation_alias="jobDescription",
+            min_length=1,
+            max_length=5000
+        ),
+        matching_agent: ResumeMatchingAgent = Depends(get_resume_agent)
+):
+    try:
+        # Validate file type
+        if not resume_file.content_type == "application/pdf":
+            raise HTTPException(
+                status_code=400,
+                detail="Only PDF files are supported"
+            )
+
+        # Read the PDF bytes
+        file_bytes = await resume_file.read()
+
+        # Process using the matching agent
+        result = await matching_agent.analyze_resume(file_bytes, job_description)
+
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
