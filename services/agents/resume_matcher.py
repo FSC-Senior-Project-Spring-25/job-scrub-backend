@@ -121,6 +121,7 @@ class ResumeMatchingAgent:
         return {
             "match_score": max(0.0, min(1.0, final_score)),
             "keyword_coverage": keyword_coverage,
+            "missing_keywords": [set(job_keywords) - set(resume_keywords)],
             "similarity_details": [
                 {"keyword": kw, "match_score": score}
                 for kw, score in keyword_matches
