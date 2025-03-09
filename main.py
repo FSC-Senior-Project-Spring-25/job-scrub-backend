@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
 from pinecone import Pinecone
+from starlette.middleware.cors import CORSMiddleware
 
 from context import RequestContextMiddleware
 from dependencies import get_job_service, get_resume_agent
@@ -69,10 +70,14 @@ app = FastAPI(lifespan=lifespan)
 # middleware to set request context
 app.add_middleware(RequestContextMiddleware)
 
-
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # TODO change this to deployed frontend URL in future
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/job/report")
