@@ -16,6 +16,12 @@ async def get_request_context() -> Request:
     return request_context.get()
 
 
+async def get_current_user(request: Request):
+    """ Get current user from request for authentication """
+    # Placeholder for authentication but not implemented:
+    return {"user_id": "user123"}
+
+
 async def get_embedder(request: Request) -> TextEmbedder:
     """Get embedder from app state"""
     return request.app.state.embedder

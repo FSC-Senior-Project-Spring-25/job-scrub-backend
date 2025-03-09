@@ -1,5 +1,7 @@
 import os
+import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated
 
 import boto3
@@ -10,9 +12,10 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
 from pinecone import Pinecone
 from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
 from context import RequestContextMiddleware
-from dependencies import get_job_service, get_resume_agent
+from dependencies import get_job_service, get_resume_agent, get_current_user
 from models.job_report import JobReport
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
@@ -119,3 +122,52 @@ async def calculate_resume_similarity(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload-resume/")
+async def upload_resume(
+        file: UploadFile = File(...),
+        current_user: dict = Depends(get_current_user)
+):
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    user_id = current_user["user_id"]
+
+    # Create a unique filename that includes the user ID to enforce ownership
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    unique_filename = f"resumes/{user_id}/{timestamp}-{uuid.uuid4()}.pdf"
+
+    try:
+        # Read file content
+        file_content = await file.read()
+
+        if len(file_content) > 5 * 1024 * 1024:  # 5MB limit
+            raise HTTPException(status_code=400, detail="File size exceeds 5MB limit")
+
+        # Upload file to S3 with metadata to track ownership
+        s3_client.put_object(
+            Bucket=BUCKET_NAME,
+            Key=unique_filename,
+            Body=file_content,
+            ContentType='application/pdf',
+            Metadata={
+                'user_id': user_id
+            }
+        )
+
+        # Return a reference ID or the S3 key itself
+        # Do NOT return a public URL since the bucket blocks public access
+        return JSONResponse(content={
+            "success": True,
+            "filename": file.filename,
+            "file_id": unique_filename,  # This is the internal reference to use later
+        })
+
+    except ClientError as e:
+        print(e)
+        raise HTTPException(status_code=500, detail="Failed to upload file to S3")
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
