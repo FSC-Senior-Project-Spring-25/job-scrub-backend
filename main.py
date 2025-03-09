@@ -2,6 +2,9 @@ import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
@@ -17,8 +20,21 @@ from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
 load_dotenv()
+
+# Pinecone client
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index = pc.Index("job-postings")
+
+# S3 client
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.environ.get("AWS_REGION", "us-east-2"),
+    config=Config(signature_version="s3v4")
+)
+
+BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 
 
 @asynccontextmanager
