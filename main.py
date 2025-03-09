@@ -171,3 +171,29 @@ async def upload_resume(
         print(e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+@app.get("/view-resume")
+async def view_resume(
+        key: str,
+        current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["user_id"]
+
+    if not key.startswith(f"resumes/{user_id}/"):
+        raise HTTPException(status_code=403, detail="Not authorized to access this file")
+
+    try:
+        url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': BUCKET_NAME,
+                'Key': key
+            },
+            ExpiresIn=3600
+        )
+
+        return JSONResponse(content={"url": url})
+
+    except ClientError as e:
+        print(f"S3 error details: {str(e)}")
+        raise HTTPException(status_code=404, detail="File not found or access denied")
