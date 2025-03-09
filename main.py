@@ -15,6 +15,7 @@ from services.gemini import GeminiLLM
 from services.jobs_posting import JobPostingService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
+from services.posts import router as posts_router #Importing the posts route
 
 load_dotenv()
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
@@ -98,3 +99,6 @@ async def calculate_resume_similarity(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    #Registering the posts route
+    app.include_router(posts_router, prefix="/api", tags=["posts"])
