@@ -124,7 +124,7 @@ async def calculate_resume_similarity(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/upload-resume/")
+@app.post("/upload-resume")
 async def upload_resume(
         file: UploadFile = File(...),
         current_user: dict = Depends(get_current_user)
