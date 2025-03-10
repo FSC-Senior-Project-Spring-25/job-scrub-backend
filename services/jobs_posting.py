@@ -9,7 +9,7 @@ from models.job_report import JobReport
 from services.text_embedder import TextEmbedder
 
 
-class JobPostingService:
+class JobsPostingService:
     def __init__(
             self,
             embedder: TextEmbedder,
@@ -92,6 +92,9 @@ class JobPostingService:
         # Create embedding
         embedding = await self.create_job_posting(job)
         # Upsert to Pinecone
-        self.index.upsert(vectors=[embedding])
+        self.index.upsert(
+            namespace="jobs",
+            vectors=[embedding]
+        )
 
         return embedding["id"]
