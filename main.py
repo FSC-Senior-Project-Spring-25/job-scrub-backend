@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     await register_app(app)
 
     # Initialize dependencies
-    S3(BUCKET_NAME, s3_client)
+    s3 = S3(BUCKET_NAME, s3_client)
     embedder = TextEmbedder()
     job_posting_service = JobPostingService(embedder, index)
 
@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
         llm=gemini_llm,
     )
 
-    app.state.s3_service = S3(BUCKET_NAME, s3_client)
+    app.state.s3_service = s3
     app.state.embedder = embedder
     app.state.job_service = job_posting_service
     app.state.gemini_llm = gemini_llm
