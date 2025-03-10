@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
     S3(BUCKET_NAME, s3_client)
     embedder = TextEmbedder()
     job_posting_service = JobsPostingService(embedder, index, session)
-    job_verification_service = JobsVerificationService(index, embedder)
+    job_verification_service = JobsVerificationService(session, index, embedder)
 
     resume_parser = ResumeParser()
     gemini_llm = GeminiLLM()
@@ -102,21 +102,21 @@ async def create_job_report(report: JobReport, job_service: JobPostingService):
     return {"message": "Job report created successfully with ID: " + id}
 
 
-@app.post("/job/verify")
+@app.post("/job/verify/{job_id}")
 async def verify_job(job_id: str, report: JobReport, job_service: JobVerificationService):
-    job_service.verify_job(job_id, report)
+    await job_service.verify_job(job_id, report)
     return {"message": "Job verified successfully"}
 
 
 @app.delete("/job/delete/{job_id}")
 async def delete_job(job_id: str, job_service: JobVerificationService):
-    job_service.delete_job(job_id)
+    await job_service.delete_job(job_id)
     return {"message": "Job deleted successfully"}
 
 
 @app.get("/job/unverified")
 async def get_unverified_jobs(job_service: JobVerificationService):
-    jobs = job_service.get_unverified_jobs()
+    jobs = await job_service.get_unverified_jobs()
     return jobs
 
 

@@ -1,17 +1,20 @@
+import aiohttp
 from fastapi import HTTPException
 from pinecone import Pinecone
 
 from models.job_report import JobReport
 from services.text_embedder import TextEmbedder
+from utils.coordinates import get_coordinates
 
 
 class JobsVerificationService:
 
-    def __init__(self, index: Pinecone.Index, embedder: TextEmbedder):
+    def __init__(self, session: aiohttp.ClientSession, index: Pinecone.Index, embedder: TextEmbedder):
+        self.session = session
         self.index = index
         self.embedder = embedder
 
-    def get_unverified_jobs(self, limit=100) -> list[dict]:
+    async def get_unverified_jobs(self, limit=100) -> list[dict]:
         """
         Get unverified jobs from the Pinecone index using a vector query with filter
 
@@ -46,7 +49,7 @@ class JobsVerificationService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    def verify_job(self, job_id: str, job_report: JobReport) -> None:
+    async def verify_job(self, job_id: str, job_report: JobReport) -> None:
         """
         Verify a job in the Pinecone index and update its metadata with the provided JobReport.
         Regenerates embeddings if title or description have been modified.
@@ -70,11 +73,18 @@ class JobsVerificationService:
             amended_metadata = job_report.model_dump(exclude_none=True, by_alias=True)
             final_metadata.update(amended_metadata)
 
+            # Check if location changed (requiring coordinates update)
+            location_changed = amended_metadata.get('location') != current_metadata.get('location')
+            if location_changed:
+                lat, lon = await get_coordinates(session=self.session, location=job_report.location)
+                final_metadata["lat"] = lat
+                final_metadata["lon"] = lon
+
             # Check if title or description changed (requiring vector update)
             title_changed = amended_metadata.get('title') != current_metadata.get('title')
             desc_changed = amended_metadata.get('description') != current_metadata.get('description')
 
-            if (title_changed or desc_changed):
+            if title_changed or desc_changed:
                 # Generate new embedding using the updated content
                 combined_text = f"{final_metadata['title']} {final_metadata['description']}"
                 new_embedding = self.embedder.get_embeddings([combined_text])[0]
@@ -93,13 +103,13 @@ class JobsVerificationService:
             # If no embedding update needed, just update metadata
             self.index.update(
                 namespace="jobs",
-                ids=[job_id],
+                id=job_id,
                 metadata=final_metadata
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    def delete_job(self, job_id: str) -> None:
+    async def delete_job(self, job_id: str) -> None:
         """
         Delete a job from the Pinecone index.
 
