@@ -1,6 +1,7 @@
 from typing import Annotated
 
-from fastapi import Request, Depends
+from fastapi import Request, Depends, HTTPException
+from firebase_admin.auth import verify_id_token
 
 from context import request_context
 from services.agents.resume_matcher import ResumeMatchingAgent
@@ -17,10 +18,31 @@ async def get_request_context() -> Request:
     return request_context.get()
 
 
-async def get_current_user(request: Request):
-    """ Get current user from request for authentication """
-    # Placeholder for authentication but not implemented:
-    return {"user_id": "user123"}
+async def get_current_user(request: Request) -> dict[str, str]:
+    """
+    Verify Firebase ID token from Authorization header and return user info
+    """
+    authorization = request.headers.get("Authorization")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authorization header"
+        )
+
+    token = authorization.split("Bearer ")[1]
+    try:
+        # Verify the Firebase ID token
+        decoded_token = verify_id_token(token)
+        return {
+            "user_id": decoded_token["uid"],
+            "email": decoded_token.get("email", "")
+        }
+    except Exception as e:
+        print(f"Invalid authentication token: {str(e)}")
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid authentication token: {str(e)}"
+        )
 
 
 async def get_s3_service(request: Request) -> S3Service:
