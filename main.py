@@ -12,7 +12,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from context import RequestContextMiddleware
-from dependencies import get_job_service, get_resume_agent, get_current_user, S3, get_s3_service
+from dependencies import get_current_user, S3, MatchingAgent, JobService
 from models.job_report import JobReport
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
@@ -83,7 +83,7 @@ app.add_middleware(
 
 
 @app.post("/job/report")
-async def create_job_report(report: JobReport, job_service: JobPostingService = Depends(get_job_service)):
+async def create_job_report(report: JobReport, job_service: JobService):
     try:
         id = await job_service.post_job(report)
         return {"message": "Job report created successfully with ID: " + id}
@@ -93,6 +93,7 @@ async def create_job_report(report: JobReport, job_service: JobPostingService = 
 
 @app.post("/resume/match")
 async def calculate_resume_similarity(
+        matching_agent: MatchingAgent,
         resume_file: Annotated[UploadFile, File(alias="resumeFile", validation_alias="resumeFile")],
         job_description: str = Form(
             ...,
@@ -101,7 +102,6 @@ async def calculate_resume_similarity(
             min_length=1,
             max_length=5000
         ),
-        matching_agent: ResumeMatchingAgent = Depends(get_resume_agent)
 ):
     try:
         # Validate file type
