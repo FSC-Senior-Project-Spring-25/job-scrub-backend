@@ -3,6 +3,7 @@ import uuid
 
 import aiohttp
 from async_lru import alru_cache
+from fastapi import HTTPException
 from pinecone import Pinecone
 
 from models.job_report import JobReport
@@ -89,12 +90,15 @@ class JobsPostingService:
 
         :return: the ID of the job
         """
-        # Create embedding
-        embedding = await self.create_job_posting(job)
-        # Upsert to Pinecone
-        self.index.upsert(
-            namespace="jobs",
-            vectors=[embedding]
-        )
+        try:
+            # Create embedding
+            embedding = await self.create_job_posting(job)
+            # Upsert to Pinecone
+            self.index.upsert(
+                namespace="jobs",
+                vectors=[embedding]
+            )
 
-        return embedding["id"]
+            return embedding["id"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))

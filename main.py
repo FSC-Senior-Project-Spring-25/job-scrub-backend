@@ -98,21 +98,21 @@ app.add_middleware(
 
 @app.post("/job/report")
 async def create_job_report(report: JobReport, job_service: JobPostingService):
-    try:
-        id = await job_service.post_job(report)
-        return {"message": "Job report created successfully with ID: " + id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    id = await job_service.post_job(report)
+    return {"message": "Job report created successfully with ID: " + id}
+
 
 @app.post("/job/verify")
 async def verify_job(job_id: str, report: JobReport, job_service: JobVerificationService):
     job_service.verify_job(job_id, report)
     return {"message": "Job verified successfully"}
 
+
 @app.delete("/job/delete/{job_id}")
 async def delete_job(job_id: str, job_service: JobVerificationService):
     job_service.delete_job(job_id)
     return {"message": "Job deleted successfully"}
+
 
 @app.get("/job/unverified")
 async def get_unverified_jobs(job_service: JobVerificationService):
