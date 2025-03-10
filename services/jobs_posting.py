@@ -1,13 +1,12 @@
-import asyncio
 import uuid
 
 import aiohttp
-from async_lru import alru_cache
 from fastapi import HTTPException
 from pinecone import Pinecone
 
 from models.job_report import JobReport
 from services.text_embedder import TextEmbedder
+from utils.coordinates import get_coordinates
 
 
 class JobsPostingService:
@@ -20,38 +19,6 @@ class JobsPostingService:
         self.embedder = embedder
         self.index = index
         self.session = session
-
-    @alru_cache(maxsize=256)
-    async def get_coordinates(self, location: str) -> tuple[float, float]:
-        """
-        Get the coordinates of a location (city, state) using OSM with caching
-        :return: the coordinates as a tuple of (lat, lon)
-        """
-        if not location:
-            return 0.0, 0.0
-
-        try:
-            async with self.session.get(
-                    url="https://nominatim.openstreetmap.org/search",
-                    params={
-                        "format": "json",
-                        "q": location
-                    },
-                    headers={
-                        "User-Agent": "JobPostingService/1.0"
-                    }
-            ) as response:
-                if response.status != 200:
-                    return 0.0, 0.0
-
-                data = await response.json()
-                if data:
-                    return float(data[0]["lat"]), float(data[0]["lon"])
-
-        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, IndexError, KeyError):
-            print(f"Error getting coordinates for {location}")
-
-        return 0.0, 0.0
 
 
     async def create_job_posting(self, job: JobReport) -> dict:
@@ -71,7 +38,7 @@ class JobsPostingService:
         # Prepare metadata
         metadata = job.model_dump(exclude_none=True, by_alias=True)
 
-        lat, lon = await self.get_coordinates(job.location)
+        lat, lon = await get_coordinates(session=self.session, location=job.location)
         metadata["lat"] = lat
         metadata["lon"] = lon
 
