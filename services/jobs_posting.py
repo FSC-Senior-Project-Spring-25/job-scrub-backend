@@ -1,3 +1,4 @@
+import requests
 from pinecone import Pinecone
 
 from models.job_report import JobReport
@@ -9,7 +10,31 @@ class JobPostingService:
         self.embedder = embedder
         self.index = index
 
-    def create_job_embedding(self, job: JobReport) -> dict:
+    @staticmethod
+    async def get_coordinates(location: str) -> tuple[float, float]:
+        """
+        Get the coordinates of a location (city, state) using OSM
+        :return: the coordinates as a list
+        """
+        response = requests.get(
+            url="https://nominatim.openstreetmap.org/search",
+            params={
+                "format": "json",
+                "q": location
+            },
+            headers={
+                # Adding a User-Agent header as required by OpenStreetMap's usage policy
+                "User-Agent": "JobPostingService/1.0"
+            }
+
+        )
+        data = response.json()
+        if data:
+            return float(data[0]["lat"]), float(data[0]["lon"])
+
+        return 0.0, 0.0
+
+    async def create_job_embedding(self, job: JobReport) -> dict:
         """
         Creates the embedding, metadata, and ID for a job, prioritizing the title and description
         in the embedding
@@ -26,6 +51,10 @@ class JobPostingService:
         # Prepare metadata
         metadata = job.model_dump(exclude_none=True, by_alias=True)
 
+        lat, lon = await self.get_coordinates(job.location)
+        metadata["lat"] = lat
+        metadata["lon"] = lon
+
         return {
             "id": f"job_{abs(hash(job.url))}",  # Create unique ID from link
             "values": embedding.tolist(),
@@ -39,8 +68,7 @@ class JobPostingService:
         :return: the ID of the job
         """
         # Create embedding
-        embedding = self.create_job_embedding(job)
-
+        embedding = await self.create_job_embedding(job)
         # Upsert to Pinecone
         self.index.upsert(vectors=[embedding])
 
