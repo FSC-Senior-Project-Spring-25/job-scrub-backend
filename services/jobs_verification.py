@@ -49,13 +49,14 @@ class JobsVerificationService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    async def verify_job(self, job_id: str, job_report: JobReport) -> None:
+    async def verify_job(self, job_id: str, verified: bool, job_report: JobReport) -> None:
         """
         Verify a job in the Pinecone index and update its metadata with the provided JobReport.
         Regenerates embeddings if title or description have been modified.
 
         Args:
             job_id: The ID of the job to verify
+            verified: Whether the job is verified or not
             job_report: Optional JobReport containing updated job information
         """
         # Get current job data
@@ -67,7 +68,7 @@ class JobsVerificationService:
             current_metadata = current_data.metadata
 
             # Start with base metadata update
-            final_metadata = {"verified": True}
+            final_metadata = {"verified": verified}
 
             # Convert JobReport to dict and update final metadata
             amended_metadata = job_report.model_dump(exclude_none=True, by_alias=True)

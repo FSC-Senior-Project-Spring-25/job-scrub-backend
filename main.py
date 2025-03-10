@@ -102,9 +102,9 @@ async def create_job_report(report: JobReport, job_service: JobPostingService):
     return {"message": "Job report created successfully with ID: " + id}
 
 
-@app.post("/job/verify/{job_id}")
-async def verify_job(job_id: str, report: JobReport, job_service: JobVerificationService):
-    await job_service.verify_job(job_id, report)
+@app.patch("/job/verify/{job_id}")
+async def verify_job(job_id: str, verified: bool, report: JobReport, job_service: JobVerificationService):
+    await job_service.verify_job(job_id, verified, report)
     return {"message": "Job verified successfully"}
 
 
