@@ -15,11 +15,12 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from context import RequestContextMiddleware
-from dependencies import get_current_user, S3, MatchingAgent, JobService
+from dependencies import get_current_user, S3, MatchingAgent, JobPostingService, JobVerificationService
 from models.job_report import JobReport
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
-from services.jobs_posting import JobPostingService
+from services.jobs_posting import JobsPostingService
+from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
@@ -55,7 +56,8 @@ async def lifespan(app: FastAPI):
     s3 = S3(BUCKET_NAME, s3_client)
     S3(BUCKET_NAME, s3_client)
     embedder = TextEmbedder()
-    job_posting_service = JobPostingService(embedder, index, session)
+    job_posting_service = JobsPostingService(embedder, index, session)
+    job_verification_service = JobsVerificationService(index, embedder)
 
     resume_parser = ResumeParser()
     gemini_llm = GeminiLLM()
@@ -69,7 +71,8 @@ async def lifespan(app: FastAPI):
     app.state.s3_service = S3(BUCKET_NAME, s3_client)
     app.state.s3_service = s3
     app.state.embedder = embedder
-    app.state.job_service = job_posting_service
+    app.state.job_posting_service = job_posting_service
+    app.state.job_verification_service = job_verification_service
     app.state.gemini_llm = gemini_llm
     app.state.resume_agent = resume_matching_agent
 
@@ -94,12 +97,27 @@ app.add_middleware(
 
 
 @app.post("/job/report")
-async def create_job_report(report: JobReport, job_service: JobService):
+async def create_job_report(report: JobReport, job_service: JobPostingService):
     try:
         id = await job_service.post_job(report)
         return {"message": "Job report created successfully with ID: " + id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/job/verify")
+async def verify_job(job_id: str, report: JobReport, job_service: JobVerificationService):
+    job_service.verify_job(job_id, report)
+    return {"message": "Job verified successfully"}
+
+@app.delete("/job/delete/{job_id}")
+async def delete_job(job_id: str, job_service: JobVerificationService):
+    job_service.delete_job(job_id)
+    return {"message": "Job deleted successfully"}
+
+@app.get("/job/unverified")
+async def get_unverified_jobs(job_service: JobVerificationService):
+    jobs = job_service.get_unverified_jobs()
+    return jobs
 
 
 @app.post("/resume/match")

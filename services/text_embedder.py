@@ -7,6 +7,7 @@ class TextEmbedder:
         self.tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-large-en-v1.5")
         self.model = AutoModel.from_pretrained("BAAI/bge-large-en-v1.5")
         self.model.eval()
+        self.dim = 1024
 
     def get_embeddings(self, texts: list[str]) -> torch.Tensor:
         """ Get embeddings for a list of texts
