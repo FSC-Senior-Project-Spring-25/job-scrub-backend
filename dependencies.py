@@ -1,5 +1,7 @@
 from typing import Annotated
 
+from aiohttp import ClientSession
+from fastapi import Request, Depends
 from fastapi import Request, Depends, HTTPException
 from firebase_admin.auth import verify_id_token
 
@@ -16,6 +18,11 @@ from services.text_embedder import TextEmbedder
 async def get_request_context() -> Request:
     """Get request context from FastAPI app"""
     return request_context.get()
+
+
+async def get_session(request: Request) -> ClientSession:
+    """Create and provide an async HTTP client session."""
+    return request.app.state.session
 
 
 async def get_current_user(request: Request) -> dict[str, str]:

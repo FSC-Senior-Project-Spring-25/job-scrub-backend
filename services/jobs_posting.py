@@ -1,4 +1,8 @@
-import requests
+import asyncio
+import uuid
+
+import aiohttp
+from async_lru import alru_cache
 from pinecone import Pinecone
 
 from models.job_report import JobReport
@@ -6,33 +10,48 @@ from services.text_embedder import TextEmbedder
 
 
 class JobPostingService:
-    def __init__(self, embedder: TextEmbedder, index: Pinecone.Index):
+    def __init__(
+            self,
+            embedder: TextEmbedder,
+            index: Pinecone.Index,
+            session: aiohttp.ClientSession,
+    ):
         self.embedder = embedder
         self.index = index
+        self.session = session
 
-    @staticmethod
-    async def get_coordinates(location: str) -> tuple[float, float]:
+    @alru_cache(maxsize=256)
+    async def get_coordinates(self, location: str) -> tuple[float, float]:
         """
-        Get the coordinates of a location (city, state) using OSM
-        :return: the coordinates as a list
+        Get the coordinates of a location (city, state) using OSM with caching
+        :return: the coordinates as a tuple of (lat, lon)
         """
-        response = requests.get(
-            url="https://nominatim.openstreetmap.org/search",
-            params={
-                "format": "json",
-                "q": location
-            },
-            headers={
-                # Adding a User-Agent header as required by OpenStreetMap's usage policy
-                "User-Agent": "JobPostingService/1.0"
-            }
+        if not location:
+            return 0.0, 0.0
 
-        )
-        data = response.json()
-        if data:
-            return float(data[0]["lat"]), float(data[0]["lon"])
+        try:
+            async with self.session.get(
+                    url="https://nominatim.openstreetmap.org/search",
+                    params={
+                        "format": "json",
+                        "q": location
+                    },
+                    headers={
+                        "User-Agent": "JobPostingService/1.0"
+                    }
+            ) as response:
+                if response.status != 200:
+                    return 0.0, 0.0
+
+                data = await response.json()
+                if data:
+                    return float(data[0]["lat"]), float(data[0]["lon"])
+
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, IndexError, KeyError):
+            print(f"Error getting coordinates for {location}")
 
         return 0.0, 0.0
+
 
     async def create_job_embedding(self, job: JobReport) -> dict:
         """
@@ -56,10 +75,11 @@ class JobPostingService:
         metadata["lon"] = lon
 
         return {
-            "id": f"job_{abs(hash(job.url))}",  # Create unique ID from link
+            "id": f"job_{uuid.uuid4()}",  # Generate unique ID using UUID
             "values": embedding.tolist(),
             "metadata": metadata,
         }
+
 
     async def post_job(self, job: JobReport) -> str:
         """

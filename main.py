@@ -2,6 +2,7 @@ import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import aiohttp
 import boto3
 import firebase_admin
 from botocore.config import Config
@@ -50,9 +51,11 @@ async def lifespan(app: FastAPI):
     firebase_admin.initialize_app(cred)
 
     # Initialize dependencies
+    session = aiohttp.ClientSession()
     s3 = S3(BUCKET_NAME, s3_client)
+    S3(BUCKET_NAME, s3_client)
     embedder = TextEmbedder()
-    job_posting_service = JobPostingService(embedder, index)
+    job_posting_service = JobPostingService(embedder, index, session)
 
     resume_parser = ResumeParser()
     gemini_llm = GeminiLLM()
@@ -62,6 +65,8 @@ async def lifespan(app: FastAPI):
         llm=gemini_llm,
     )
 
+    app.state.session = session
+    app.state.s3_service = S3(BUCKET_NAME, s3_client)
     app.state.s3_service = s3
     app.state.embedder = embedder
     app.state.job_service = job_posting_service
