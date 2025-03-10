@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 import boto3
+import firebase_admin
 from botocore.config import Config
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
+from firebase_admin import credentials
 from pinecone import Pinecone
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
@@ -42,6 +44,10 @@ BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 async def lifespan(app: FastAPI):
     # Register app with FastAPI Injectable
     await register_app(app)
+
+    # Initialize Firebase Admin SDK
+    cred = credentials.Certificate("./firebase.json")
+    firebase_admin.initialize_app(cred)
 
     # Initialize dependencies
     s3 = S3(BUCKET_NAME, s3_client)
@@ -132,7 +138,7 @@ async def upload_resume(
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
-    user_id = current_user["user_id"]
+    user_id = current_user["user_id"]  # Firebase UID
 
     unique_filename = await s3_service.upload_file(file, user_id)
 
@@ -149,8 +155,9 @@ async def view_resume(
         key: str,
         current_user: dict = Depends(get_current_user),
 ):
-    user_id = current_user["user_id"]
+    user_id = current_user["user_id"]  # Firebase UID
 
+    # Security check: Ensure the user can only access their own files
     if not key.startswith(f"resumes/{user_id}/"):
         raise HTTPException(status_code=403, detail="Not authorized to access this file")
 
