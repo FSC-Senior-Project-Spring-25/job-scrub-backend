@@ -1,7 +1,6 @@
 from typing import Annotated
 
 from aiohttp import ClientSession
-from fastapi import Request, Depends
 from fastapi import Request, Depends, HTTPException
 from firebase_admin.auth import verify_id_token
 

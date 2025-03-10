@@ -53,7 +53,7 @@ class JobPostingService:
         return 0.0, 0.0
 
 
-    async def create_job_embedding(self, job: JobReport) -> dict:
+    async def create_job_posting(self, job: JobReport) -> dict:
         """
         Creates the embedding, metadata, and ID for a job, prioritizing the title and description
         in the embedding
@@ -74,6 +74,8 @@ class JobPostingService:
         metadata["lat"] = lat
         metadata["lon"] = lon
 
+        # All jobs are unverified by default
+        metadata["verified"] = False
         return {
             "id": f"job_{uuid.uuid4()}",  # Generate unique ID using UUID
             "values": embedding.tolist(),
@@ -88,7 +90,7 @@ class JobPostingService:
         :return: the ID of the job
         """
         # Create embedding
-        embedding = await self.create_job_embedding(job)
+        embedding = await self.create_job_posting(job)
         # Upsert to Pinecone
         self.index.upsert(vectors=[embedding])
 
