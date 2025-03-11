@@ -101,4 +101,4 @@ async def calculate_resume_similarity(
         raise HTTPException(status_code=500, detail=str(e))
 
     #Registering the posts route
-    app.include_router(posts_router, prefix="/api", tags=["posts"])
+app.include_router(posts_router, prefix="/api", tags=["posts"])
