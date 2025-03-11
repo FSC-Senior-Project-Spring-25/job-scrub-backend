@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(posts_router, prefix="/api", tags=["posts"])
 
 # middleware to set request context
 app.add_middleware(RequestContextMiddleware)
@@ -99,6 +100,3 @@ async def calculate_resume_similarity(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-    #Registering the posts route
-app.include_router(posts_router, prefix="/api", tags=["posts"])

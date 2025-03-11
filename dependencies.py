@@ -7,9 +7,12 @@ from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
 from services.jobs_posting import JobPostingService
 from services.resume_parser import ResumeParser
-
+from google.cloud import firestore
 from services.text_embedder import TextEmbedder
-
+import firebase_admin
+from firebase_admin import credentials, auth as firebase_auth, firestore
+from fastapi import HTTPException, Request
+from google.cloud import firestore as google_firestore
 
 async def get_request_context() -> Request:
     """Get request context from FastAPI app"""
@@ -47,3 +50,42 @@ JobService = Annotated[TextEmbedder, Depends(get_job_service)]
 GeminiLLM = Annotated[GeminiLLM, Depends(get_gemini_llm)]
 ResumeParser = Annotated[ResumeParser, Depends(get_resume_parser)]
 ResumeAgent = Annotated[ResumeMatchingAgent, Depends(get_resume_agent)]
+
+class FirestoreDB:
+    def __init__(self):
+        # If your credentials are set via environment variable 
+        # (GOOGLE_APPLICATION_CREDENTIALS), this will just work.
+        self.db = firestore.Client()
+
+    def collection(self, name: str):
+        return self.db.collection(name)
+
+async def get_db():
+    return FirestoreDB()
+try:
+    # If already initialized (e.g., in dev with reload), this won't run again.
+    firebase_admin.get_app()
+except ValueError:
+    cred = credentials.Certificate("firebase.json")
+    firebase_admin.initialize_app(cred)
+
+# 2. Create a Firestore client from firebase_admin
+db = firestore.client()
+
+# 3. A FastAPI dependency returning the Firestore client
+def get_db():
+    return db
+
+# 4. A FastAPI dependency verifying an ID token and returning the user UID
+async def get_current_user(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    token = auth_header[len("Bearer "):]
+    try:
+        decoded_token = firebase_auth.verify_id_token(token)
+        uid = decoded_token["uid"]
+        return uid
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
