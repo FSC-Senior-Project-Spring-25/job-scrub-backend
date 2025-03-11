@@ -69,23 +69,3 @@ except ValueError:
     cred = credentials.Certificate("firebase.json")
     firebase_admin.initialize_app(cred)
 
-# 2. Create a Firestore client from firebase_admin
-db = firestore.client()
-
-# 3. A FastAPI dependency returning the Firestore client
-def get_db():
-    return db
-
-# 4. A FastAPI dependency verifying an ID token and returning the user UID
-async def get_current_user(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
-
-    token = auth_header[len("Bearer "):]
-    try:
-        decoded_token = firebase_auth.verify_id_token(token)
-        uid = decoded_token["uid"]
-        return uid
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
