@@ -13,6 +13,7 @@ def get_posts(db: FirestoreDB):
     posts = [post.to_dict() for post in posts_ref]
     return posts
 # Post Creation (Ep)
+@router.post("/posts")
 def create_post(author: str, content: str, db: FirestoreDB):
     new_post_ref = db.collection("posts").document()
     new_post_data = {
