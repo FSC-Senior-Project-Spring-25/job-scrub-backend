@@ -63,7 +63,7 @@ class S3Service:
             print(f"Unexpected error: {e}")
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    def get_presigned_url(self, key: str, expiration_seconds: int = 3600) -> str:
+    async def get_presigned_url(self, key: str, expiration_seconds: int = 3600) -> str:
         """
         Generate a presigned URL for accessing a file
 

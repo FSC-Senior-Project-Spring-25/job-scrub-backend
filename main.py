@@ -154,7 +154,7 @@ async def calculate_resume_similarity(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/upload-resume")
+@app.post("/resume/upload")
 async def upload_resume(
         s3_service: S3,
         file: UploadFile = File(...),
@@ -174,7 +174,7 @@ async def upload_resume(
     })
 
 
-@app.get("/view-resume")
+@app.get("/resume/view")
 async def view_resume(
         s3_service: S3,
         key: str,
@@ -186,5 +186,5 @@ async def view_resume(
     if not key.startswith(f"resumes/{user_id}/"):
         raise HTTPException(status_code=403, detail="Not authorized to access this file")
 
-    url = s3_service.get_presigned_url(key)
+    url = await s3_service.get_presigned_url(key)
     return JSONResponse(content={"url": url})
