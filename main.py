@@ -188,3 +188,22 @@ async def view_resume(
 
     url = await s3_service.get_presigned_url(key)
     return JSONResponse(content={"url": url})
+
+
+@app.delete("/resume/delete")
+async def delete_resume(
+        s3_service: S3,
+        key: str,
+        current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["user_id"]  # Firebase UID
+
+    # Security check: Ensure the user can only delete their own files
+    if not key.startswith(f"resumes/{user_id}/"):
+        raise HTTPException(status_code=403, detail="Not authorized to delete this file")
+
+    if await s3_service.delete_file(key):
+        return JSONResponse(content={"success": True})
+
+    # Must have failed to delete
+    raise HTTPException(status_code=500, detail="Failed to delete file")

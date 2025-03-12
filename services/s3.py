@@ -90,3 +90,20 @@ class S3Service:
         except ClientError as e:
             print(f"S3 error details: {str(e)}")
             raise HTTPException(status_code=404, detail="File not found or access denied")
+
+    async def delete_file(self, key: str) -> bool:
+        """
+        Delete a file from S3
+
+        Args:
+            key: The S3 key of the file
+
+        Returns:
+            True if file was deleted successfully, False otherwise
+        """
+        try:
+            self.s3.delete_object(Bucket=self.bucket_name, Key=key)
+            return True
+        except ClientError as e:
+            print(f"S3 error details: {str(e)}")
+            return False
