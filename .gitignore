@@ -1,2 +1,2 @@
-*.env
-firebase.json
+.env
+/firebase.json
