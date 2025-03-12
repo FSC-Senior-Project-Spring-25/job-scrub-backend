@@ -21,6 +21,7 @@ from services.gemini import GeminiLLM
 from services.jobs_posting import JobPostingService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
+from services.posts import router as posts_router #Importing the posts route
 
 load_dotenv()
 
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(posts_router, prefix="/api", tags=["posts"])
 
 # middleware to set request context
 app.add_middleware(RequestContextMiddleware)
