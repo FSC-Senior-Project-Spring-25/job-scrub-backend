@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from dependencies import FirestoreDB, get_db, get_current_user
+from dependencies import FirestoreDB, get_db
 from models.post import Post
 from datetime import datetime
 from typing import List
