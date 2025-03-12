@@ -15,7 +15,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from context import RequestContextMiddleware
-from dependencies import get_current_user, S3, MatchingAgent, JobPostingService, JobVerificationService
+from dependencies import get_current_user, S3, MatchingAgent, JobPostingService, JobVerificationService, Firestore
 from models.job_report import JobReport
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
@@ -23,7 +23,7 @@ from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
-from services.posts import router as posts_router #Importing the posts route
+from services.posts import router as posts_router
 
 load_dotenv()
 
@@ -50,12 +50,12 @@ async def lifespan(app: FastAPI):
 
     # Initialize Firebase Admin SDK
     cred = credentials.Certificate("./firebase.json")
-    firebase_admin.initialize_app(cred)
+    firebase_app = firebase_admin.initialize_app(cred)
 
     # Initialize dependencies
     session = aiohttp.ClientSession()
     s3 = S3(BUCKET_NAME, s3_client)
-    S3(BUCKET_NAME, s3_client)
+    firestore = Firestore(firebase_app)
     embedder = TextEmbedder()
     job_posting_service = JobsPostingService(embedder, index, session)
     job_verification_service = JobsVerificationService(session, index, embedder)
@@ -69,8 +69,8 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.session = session
-    app.state.s3_service = S3(BUCKET_NAME, s3_client)
     app.state.s3_service = s3
+    app.state.firestore = firestore
     app.state.embedder = embedder
     app.state.job_posting_service = job_posting_service
     app.state.job_verification_service = job_verification_service

@@ -2,16 +2,17 @@ from typing import Annotated
 
 from aiohttp import ClientSession
 from fastapi import Request, Depends, HTTPException
+from firebase_admin import firestore
 from firebase_admin.auth import verify_id_token
 
 from context import request_context
 from services.agents.resume_matcher import ResumeMatchingAgent
+from services.firestore import FirestoreDB
 from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.s3 import S3Service
-
 from services.text_embedder import TextEmbedder
 
 
@@ -57,6 +58,11 @@ async def get_s3_service(request: Request) -> S3Service:
     return request.app.state.s3_service
 
 
+async def get_firestore(request: Request):
+    """ Get Firestore DB from app state """
+    return request.app.state.firestore
+
+
 async def get_embedder(request: Request) -> TextEmbedder:
     """Get embedder from app state"""
     return request.app.state.embedder
@@ -65,6 +71,7 @@ async def get_embedder(request: Request) -> TextEmbedder:
 async def get_job_posting_service(request: Request) -> JobsPostingService:
     """Get embedder from app state"""
     return request.app.state.job_posting_service
+
 
 async def get_job_verification_service(request: Request) -> JobsVerificationService:
     """Get embedder from app state"""
@@ -88,6 +95,7 @@ async def get_resume_agent(request: Request) -> ResumeMatchingAgent:
 
 # Type annotations for dependency injection (used in non-FastAPI routes with @injectable)
 S3 = Annotated[S3Service, Depends(get_s3_service)]
+Firestore = Annotated[FirestoreDB, Depends(get_firestore)]
 Embedder = Annotated[TextEmbedder, Depends(get_embedder)]
 JobPostingService = Annotated[TextEmbedder, Depends(get_job_posting_service)]
 JobVerificationService = Annotated[TextEmbedder, Depends(get_job_verification_service)]
