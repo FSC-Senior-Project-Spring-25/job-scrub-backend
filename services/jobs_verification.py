@@ -105,7 +105,7 @@ class JobsVerificationService:
             self.index.update(
                 namespace="jobs",
                 id=job_id,
-                metadata=final_metadata
+                set_metadata=final_metadata
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
