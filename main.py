@@ -23,8 +23,8 @@ from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
-from services.posts import router as posts_router
 from routes.posts import router as posts_router
+from routes.auth import router as auth_router
 
 load_dotenv()
 
@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(posts_router, prefix="/api", tags=["posts"])
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
 
 # middleware to set request context
 app.add_middleware(RequestContextMiddleware)
@@ -96,6 +97,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["set-cookie"]
 )
 
 
