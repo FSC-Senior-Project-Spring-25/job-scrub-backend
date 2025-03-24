@@ -24,6 +24,7 @@ from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 from services.posts import router as posts_router
+from routes.posts import router as posts_router
 
 load_dotenv()
 
