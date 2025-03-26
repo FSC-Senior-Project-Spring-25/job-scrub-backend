@@ -1,15 +1,27 @@
+import uuid
+
+import aiohttp
+from fastapi import HTTPException
 from pinecone import Pinecone
 
 from models.job_report import JobReport
 from services.text_embedder import TextEmbedder
+from utils.coordinates import get_coordinates
 
 
-class JobPostingService:
-    def __init__(self, embedder: TextEmbedder, index: Pinecone.Index):
+class JobsPostingService:
+    def __init__(
+            self,
+            embedder: TextEmbedder,
+            index: Pinecone.Index,
+            session: aiohttp.ClientSession,
+    ):
         self.embedder = embedder
         self.index = index
+        self.session = session
 
-    def create_job_embedding(self, job: JobReport) -> dict:
+
+    async def create_job_posting(self, job: JobReport) -> dict:
         """
         Creates the embedding, metadata, and ID for a job, prioritizing the title and description
         in the embedding
@@ -26,11 +38,18 @@ class JobPostingService:
         # Prepare metadata
         metadata = job.model_dump(exclude_none=True, by_alias=True)
 
+        lat, lon = await get_coordinates(session=self.session, location=job.location)
+        metadata["lat"] = lat
+        metadata["lon"] = lon
+
+        # All jobs are unverified by default
+        metadata["verified"] = False
         return {
-            "id": f"job_{abs(hash(job.url))}",  # Create unique ID from link
+            "id": f"job_{uuid.uuid4()}",  # Generate unique ID using UUID
             "values": embedding.tolist(),
             "metadata": metadata,
         }
+
 
     async def post_job(self, job: JobReport) -> str:
         """
@@ -38,10 +57,15 @@ class JobPostingService:
 
         :return: the ID of the job
         """
-        # Create embedding
-        embedding = self.create_job_embedding(job)
+        try:
+            # Create embedding
+            embedding = await self.create_job_posting(job)
+            # Upsert to Pinecone
+            self.index.upsert(
+                namespace="jobs",
+                vectors=[embedding]
+            )
 
-        # Upsert to Pinecone
-        self.index.upsert(vectors=[embedding])
-
-        return embedding["id"]
+            return embedding["id"]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
