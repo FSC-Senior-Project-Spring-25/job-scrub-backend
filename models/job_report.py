@@ -1,7 +1,20 @@
 import datetime
+from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class Location(BaseModel):
+    address: str
+    lat: float
+    lon: float
+
+
+class LocationType(Enum):
+    REMOTE = "remote"
+    ONSITE = "onsite"
+    HYBRID = "hybrid"
 
 
 class JobReport(BaseModel):
@@ -10,8 +23,13 @@ class JobReport(BaseModel):
     url: str
     description: str
     job_type: str
-    location: str = "Remote"
     skills: list[str] = []
+    location: Location
+    location_type: LocationType = Field(..., alias="locationType")
     benefits: Optional[list[str]] = []
     date: Optional[str] = datetime.date.today().strftime("%Y-%m-%d")
     salary: Optional[str] = None
+
+
+class AutoFillJobReport(BaseModel):
+    content: str
