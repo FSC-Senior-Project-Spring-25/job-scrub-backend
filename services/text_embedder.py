@@ -9,7 +9,7 @@ class TextEmbedder:
         self.model.eval()
         self.dim = 1024
 
-    def get_embeddings(self, texts: list[str]) -> torch.Tensor:
+    async def get_embeddings(self, texts: list[str]) -> torch.Tensor:
         """ Get embeddings for a list of texts
 
         Args:

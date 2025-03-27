@@ -58,11 +58,12 @@ async def lifespan(app: FastAPI):
     s3 = S3(BUCKET_NAME, s3_client)
     firestore = Firestore(firebase_app)
     embedder = TextEmbedder()
-    job_posting_service = JobsPostingService(embedder, index, session)
+    gemini_llm = GeminiLLM()
+
+    job_posting_service = JobsPostingService(embedder, index, gemini_llm, session)
     job_verification_service = JobsVerificationService(session, index, embedder)
 
     resume_parser = ResumeParser()
-    gemini_llm = GeminiLLM()
     resume_matching_agent = ResumeMatchingAgent(
         resume_parser=resume_parser,
         text_embedder=embedder,
