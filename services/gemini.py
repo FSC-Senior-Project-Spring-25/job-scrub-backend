@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, AsyncGenerator
 import json
 from dataclasses import dataclass
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -142,3 +142,43 @@ class GeminiLLM:
                 success=False,
                 error=f"Generation failed: {str(e)}"
             )
+
+    async def generate_stream(
+            self,
+            system_prompt: str,
+            user_message: str,
+            response_format: ResponseFormat = ResponseFormat.RAW
+    ) -> AsyncGenerator[str, None]:
+        """Generate a streaming response from Gemini
+
+        Args:
+            system_prompt: System instruction prompt
+            user_message: User's input message
+            response_format: Desired format for the response
+
+        Yields:
+            Chunks of the generated response
+        """
+        try:
+            messages = self._create_messages(system_prompt, user_message, response_format)
+            stream = self.llm.astream(messages)  # Don't await here
+
+            buffer = ""
+            async for chunk in stream:  # Stream directly
+                if chunk.content:
+                    if response_format == ResponseFormat.JSON:
+                        # Buffer JSON content
+                        buffer += chunk.content
+                    else:
+                        yield chunk.content
+
+            # If JSON format, yield the complete buffered content
+            if response_format == ResponseFormat.JSON and buffer:
+                try:
+                    json_content = json.loads(buffer)
+                    yield json.dumps(json_content)
+                except json.JSONDecodeError:
+                    yield buffer
+
+        except Exception as e:
+            yield f"Error: {str(e)}"
