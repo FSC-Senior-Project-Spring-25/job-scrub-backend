@@ -1,9 +1,11 @@
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from starlette.responses import JSONResponse
 
-from dependencies import MatchingAgent, S3, get_current_user
+from dependencies import MatchingAgent, S3, get_current_user, Parser, LLM, PineconeClient, Embedder
+from services.agents.tools.extract_keywords import extract_keywords
 
 router = APIRouter()
 
@@ -43,21 +45,84 @@ async def calculate_resume_similarity(
 @router.post("/upload")
 async def upload_resume(
         s3_service: S3,
+        parser: Parser,
+        llm: LLM,
+        pinecone: PineconeClient,
+        embedder: Embedder,
         file: UploadFile = File(...),
         current_user: dict = Depends(get_current_user),
 ):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
-    user_id = current_user["user_id"]  # Firebase UID
+    user_id = current_user["user_id"]
+    resume_index = pinecone.Index("resumes")
 
-    unique_filename = await s3_service.upload_file(file, user_id)
+    # Read file bytes only once
+    file_bytes = await file.read()
 
-    return JSONResponse(content={
-        "success": True,
-        "filename": file.filename,
-        "file_id": unique_filename,  # This is the internal reference to use later
-    })
+    # Reset file position for S3 upload
+    file.file.seek(0)
+
+    async def process_resume():
+        try:
+            # Parse text
+            text = parser.parse_pdf(file_bytes)
+
+            # Run text processing tasks concurrently
+            keywords_task = extract_keywords(text, llm)
+            embeddings_task = embedder.get_embeddings([text])
+            upload_task = s3_service.upload_file(
+                file=file,
+                user_id=user_id,
+                content_type=file.content_type
+            )
+
+            keywords, embeddings, unique_filename = await asyncio.gather(
+                keywords_task,
+                embeddings_task,
+                upload_task
+            )
+
+            return text, keywords, embeddings[0], unique_filename
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process resume: {str(e)}"
+            )
+
+    try:
+        text, keywords, embedding, unique_filename = await process_resume()
+
+        # Prepare metadata
+        metadata = {
+            "filename": file.filename,
+            "file_id": unique_filename,
+            "keywords": keywords,
+            "text": text,  # Store parsed text for future use
+        }
+
+        # Store in Pinecone
+        resume_index.upsert(
+            namespace="resumes",
+            vectors=[{
+                "id": user_id,
+                "values": embedding.tolist(),
+                "metadata": metadata,
+            }]
+        )
+
+        return JSONResponse(content={
+            "success": True,
+            "filename": file.filename,
+            "file_id": unique_filename,
+        })
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload resume: {str(e)}"
+        )
 
 
 @router.get("/view")

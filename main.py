@@ -73,10 +73,12 @@ async def lifespan(app: FastAPI):
     app.state.s3_service = s3
     app.state.firestore = firestore
     app.state.embedder = embedder
+    app.state.resume_parser = resume_parser
     app.state.job_posting_service = job_posting_service
     app.state.job_verification_service = job_verification_service
     app.state.gemini_llm = gemini_llm
     app.state.resume_agent = resume_matching_agent
+    app.state.pinecone = pc
 
     yield
     # Cleanup resources

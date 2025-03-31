@@ -2,8 +2,8 @@ from typing import Annotated
 
 from aiohttp import ClientSession
 from fastapi import Request, Depends, HTTPException
-from firebase_admin import firestore
 from firebase_admin.auth import verify_id_token
+from pinecone import Pinecone
 
 from context import request_context
 from services.agents.resume_matcher import ResumeMatchingAgent
@@ -63,6 +63,11 @@ async def get_firestore(request: Request):
     return request.app.state.firestore
 
 
+async def get_pinecone(request: Request) -> Pinecone:
+    """Get Pinecone client from app state"""
+    return request.app.state.pinecone
+
+
 async def get_embedder(request: Request) -> TextEmbedder:
     """Get embedder from app state"""
     return request.app.state.embedder
@@ -102,3 +107,4 @@ JobVerifier = Annotated[JobsVerificationService, Depends(get_job_verification_se
 LLM = Annotated[GeminiLLM, Depends(get_gemini_llm)]
 Parser = Annotated[ResumeParser, Depends(get_resume_parser)]
 MatchingAgent = Annotated[ResumeMatchingAgent, Depends(get_resume_agent)]
+PineconeClient = Annotated[Pinecone, Depends(get_pinecone)]
