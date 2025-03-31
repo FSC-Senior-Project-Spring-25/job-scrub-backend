@@ -46,7 +46,9 @@ class JobsPostingService:
         metadata["lon"] = job.location.lon
         metadata["address"] = job.location.address
         metadata["keywords"] = keywords
-        metadata["locationType"] = job.location_type.value  # Convert enum to string
+        # Convert enum to string
+        metadata["jobType"] = job.job_type.value
+        metadata["locationType"] = job.location_type.value
 
         # All jobs are unverified by default
         metadata["verified"] = False
