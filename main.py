@@ -15,16 +15,16 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from context import RequestContextMiddleware
-from dependencies import get_current_user, S3, MatchingAgent, JobPostingService, JobVerificationService, Firestore
-from models.job_report import JobReport
+from dependencies import get_current_user, S3, MatchingAgent, Firestore
+from routes.auth import router as auth_router
+from routes.jobs import router as jobs_router
+from routes.posts import router as posts_router
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
-from routes.posts import router as posts_router
-from routes.auth import router as auth_router
 
 load_dotenv()
 
@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(jobs_router, prefix="/job", tags=["jobs"])
 app.include_router(posts_router, prefix="/api", tags=["posts"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
 
@@ -100,30 +101,6 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["set-cookie"]
 )
-
-
-@app.post("/job/report")
-async def create_job_report(report: JobReport, job_service: JobPostingService):
-    id = await job_service.post_job(report)
-    return {"message": "Job report created successfully with ID: " + id}
-
-
-@app.patch("/job/verify/{job_id}")
-async def verify_job(job_id: str, verified: bool, report: JobReport, job_service: JobVerificationService):
-    await job_service.verify_job(job_id, verified, report)
-    return {"message": "Job verified successfully"}
-
-
-@app.delete("/job/delete/{job_id}")
-async def delete_job(job_id: str, job_service: JobVerificationService):
-    await job_service.delete_job(job_id)
-    return {"message": "Job deleted successfully"}
-
-
-@app.get("/job/unverified")
-async def get_unverified_jobs(job_service: JobVerificationService):
-    jobs = await job_service.get_unverified_jobs()
-    return jobs
 
 
 @app.post("/resume/match")
