@@ -16,13 +16,19 @@ class LocationType(Enum):
     ONSITE = "onsite"
     HYBRID = "hybrid"
 
+class JobType(Enum):
+    FULL_TIME = "fulltime"
+    PART_TIME = "parttime"
+    INTERNSHIP = "internship"
+    CONTRACT = "contract"
+    VOLUNTEER = "volunteer"
 
 class JobReport(BaseModel):
     title: str
     company: str
     url: str
     description: str
-    job_type: str
+    job_type: JobType = Field(..., alias="jobType")
     skills: list[str] = []
     location: Location
     location_type: LocationType = Field(..., alias="locationType")
