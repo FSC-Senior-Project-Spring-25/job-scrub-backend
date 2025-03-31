@@ -1,24 +1,23 @@
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated
 
 import aiohttp
 import boto3
 import firebase_admin
 from botocore.config import Config
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
 from firebase_admin import credentials
 from pinecone import Pinecone
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
 
 from context import RequestContextMiddleware
-from dependencies import get_current_user, S3, MatchingAgent, Firestore
+from dependencies import S3, Firestore
 from routes.auth import router as auth_router
 from routes.jobs import router as jobs_router
 from routes.posts import router as posts_router
+from routes.resume import router as resume_router
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
@@ -85,9 +84,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(jobs_router, prefix="/job", tags=["jobs"])
-app.include_router(posts_router, prefix="/api", tags=["posts"])
-app.include_router(auth_router, prefix="/auth", tags=["auth"])
 
 # middleware to set request context
 app.add_middleware(RequestContextMiddleware)
@@ -102,89 +98,8 @@ app.add_middleware(
     expose_headers=["set-cookie"]
 )
 
-
-@app.post("/resume/match")
-async def calculate_resume_similarity(
-        matching_agent: MatchingAgent,
-        resume_file: Annotated[UploadFile, File(alias="resumeFile", validation_alias="resumeFile")],
-        job_description: str = Form(
-            ...,
-            alias="jobDescription",
-            validation_alias="jobDescription",
-            min_length=1,
-            max_length=5000
-        ),
-):
-    try:
-        # Validate file type
-        if not resume_file.content_type == "application/pdf":
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF files are supported"
-            )
-
-        # Read the PDF bytes
-        file_bytes = await resume_file.read()
-
-        # Process using the matching agent
-        result = await matching_agent.analyze_resume(file_bytes, job_description)
-
-        return result
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/resume/upload")
-async def upload_resume(
-        s3_service: S3,
-        file: UploadFile = File(...),
-        current_user: dict = Depends(get_current_user),
-):
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
-
-    user_id = current_user["user_id"]  # Firebase UID
-
-    unique_filename = await s3_service.upload_file(file, user_id)
-
-    return JSONResponse(content={
-        "success": True,
-        "filename": file.filename,
-        "file_id": unique_filename,  # This is the internal reference to use later
-    })
-
-
-@app.get("/resume/view")
-async def view_resume(
-        s3_service: S3,
-        key: str,
-        current_user: dict = Depends(get_current_user),
-):
-    user_id = current_user["user_id"]  # Firebase UID
-
-    # Security check: Ensure the user can only access their own files
-    if not key.startswith(f"resumes/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not authorized to access this file")
-
-    url = await s3_service.get_presigned_url(key)
-    return JSONResponse(content={"url": url})
-
-
-@app.delete("/resume/delete")
-async def delete_resume(
-        s3_service: S3,
-        key: str,
-        current_user: dict = Depends(get_current_user),
-):
-    user_id = current_user["user_id"]  # Firebase UID
-
-    # Security check: Ensure the user can only delete their own files
-    if not key.startswith(f"resumes/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not authorized to delete this file")
-
-    if await s3_service.delete_file(key):
-        return JSONResponse(content={"success": True})
-
-    # Must have failed to delete
-    raise HTTPException(status_code=500, detail="Failed to delete file")
+# Include routers
+app.include_router(jobs_router, prefix="/job", tags=["jobs"])
+app.include_router(resume_router, prefix="/resume", tags=["resume"])
+app.include_router(posts_router, prefix="/api", tags=["posts"])
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
