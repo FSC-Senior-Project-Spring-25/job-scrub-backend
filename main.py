@@ -19,7 +19,10 @@ from routes.chat import router as chat_router
 from routes.jobs import router as jobs_router
 from routes.posts import router as posts_router
 from routes.resume import router as resume_router
+from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
+from services.agents.supervisor_agent import SupervisorAgent
+from services.agents.user_profile_agent import UserProfileAgent
 from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
@@ -31,6 +34,7 @@ load_dotenv()
 # Pinecone client
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index = pc.Index("job-postings")
+resumes_index = pc.Index("resumes")
 
 # S3 client
 s3_client = boto3.client(
@@ -69,17 +73,36 @@ async def lifespan(app: FastAPI):
         text_embedder=embedder,
         llm=gemini_llm,
     )
+    enhancement_agent = ResumeEnhancementAgent(
+        llm=gemini_llm,
+        text_embedder=embedder,
+        s3_service=s3,
+        resumes_index=resumes_index
+    )
+    user_profile_agent = UserProfileAgent(
+        resumes_index=resumes_index,
+        llm=gemini_llm
+    )
+    supervisor_agent = SupervisorAgent(
+        llm=gemini_llm,
+        resume_matcher=resume_matching_agent,
+        resume_enhancer=enhancement_agent,
+        user_profile_agent=user_profile_agent,
+    )
 
     app.state.session = session
     app.state.s3_service = s3
     app.state.firestore = firestore
+    app.state.pinecone = pc
     app.state.embedder = embedder
     app.state.resume_parser = resume_parser
     app.state.job_posting_service = job_posting_service
     app.state.job_verification_service = job_verification_service
     app.state.gemini_llm = gemini_llm
     app.state.resume_agent = resume_matching_agent
-    app.state.pinecone = pc
+    app.state.resume_enhancer = enhancement_agent
+    app.state.user_profile_agent = user_profile_agent
+    app.state.supervisor_agent = supervisor_agent
 
     yield
     # Cleanup resources
