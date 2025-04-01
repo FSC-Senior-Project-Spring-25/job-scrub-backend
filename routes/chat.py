@@ -1,11 +1,47 @@
+import asyncio
+import json
+from datetime import datetime
+from typing import List, Optional, Dict, Any
+
 from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
-from typing import List, Optional
 
-from dependencies import LLM, Parser, get_current_user
+from dependencies import LLM, Parser, get_current_user, SupervisorAgent
 from models.chat import ChatMessage
 
 router = APIRouter()
+
+
+async def process_files(files: List[UploadFile], parser: Parser) -> List[Dict[str, Any]]:
+    """
+    Process uploaded files and extract content
+
+    Args:
+        files: List of uploaded files
+        parser: Parser service to extract content
+
+    Returns:
+        List of processed file data
+    """
+    processed_files = []
+
+    for file in files:
+        file_bytes = await file.read()
+        file_type = "text"
+        content = None
+
+        if file.filename.endswith('.pdf'):
+            file_type = "pdf"
+            content = parser.parse_pdf(file_bytes)
+
+        processed_files.append({
+            "filename": file.filename,
+            "type": file_type,
+            "bytes": file_bytes,
+            "content": content
+        })
+
+    return processed_files
 
 
 async def generate_chat_response(
@@ -25,53 +61,75 @@ async def generate_chat_response(
 
 @router.post("/stream")
 async def chat_stream(
-        llm: LLM,
         parser: Parser,
+        supervisor: SupervisorAgent,
         message: str = Form(...),
         files: Optional[List[UploadFile]] = File(None),
+        conversation_history: str = Form("[]"),
         current_user: dict = Depends(get_current_user),
 ):
     """
     Stream chat responses with optional file context
-
-    Args:
-        message: User's message
-        files: Optional list of context files (PDFs)
-        llm: LLM service
-        parser: PDF parser service
-        current_user: Authenticated user info
     """
     try:
-        # Process any context files
-        context = ""
-        if files:
-            for file in files:
-                if file.filename.endswith('.pdf'):
-                    file_bytes = await file.read()
-                    context += f"\nDocument content:\n{parser.parse_pdf(file_bytes)}"
+        print(f"[CHAT_STREAM] Processing message: {message[:50]}...")
+        print(f"[CHAT_STREAM] User: {current_user['user_id']}")
+        print(f"[CHAT_STREAM] Files: {len(files) if files else 0}")
 
-        # Create system prompt
-        system_prompt = (
-            "You are a helpful AI assistant. Respond concisely and professionally. "
-            "If provided with document context, use it to inform your responses."
+        # Parse conversation history
+        history = json.loads(conversation_history)
+        print(f"[CHAT_STREAM] History items: {len(history)}")
+
+        # Process any uploaded files
+        processed_files = await process_files(files or [], parser)
+        print(f"[CHAT_STREAM] Processed files: {len(processed_files)}")
+
+        # Process the message through supervisor
+        print(f"[CHAT_STREAM] Calling supervisor.process_message")
+        result = await supervisor.process_message(
+            user_id=current_user["user_id"],
+            message=message,
+            conversation_history=history,
+            files=processed_files if processed_files else None
         )
 
-        if context:
-            system_prompt += context
+        print(f"[CHAT_STREAM] Supervisor selected agent: {result['selected_agent']}")
+        print(f"[CHAT_STREAM] Response: {result['response'][:100]}..." if result["response"] else "No response")
+
+        # Return the response along with updated conversation history
+        async def direct_stream():
+            if result["response"]:
+                # First yield the full conversation history as a special message
+                yield f"data: {{\"type\":\"history\",\"conversation\":{json.dumps(result['conversation'])}}}\n\n"
+
+                # Then stream the response chunks
+                chunks = [result["response"][i:i + 100] for i in range(0, len(result["response"]), 100)]
+                for chunk in chunks:
+                    yield f"data: {chunk}\n\n"
+                    await asyncio.sleep(0.05)
+            yield "data: [DONE]\n\n"
 
         return StreamingResponse(
-            generate_chat_response(llm, system_prompt, message),
+            direct_stream(),
             media_type="text/event-stream"
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[CHAT_STREAM] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return StreamingResponse(
+            iter([f"data: Error: {str(e)}\n\n"]),
+            media_type="text/event-stream"
+        )
 
 
 @router.post("")
 async def chat(
+        supervisor: SupervisorAgent,
+        parser: Parser,
         chat_message: ChatMessage,
-        llm: LLM,
+        conversation_history: str = Form("[]"),
         current_user: dict = Depends(get_current_user),
 ):
     """
@@ -79,20 +137,129 @@ async def chat(
 
     Args:
         chat_message: Message content and optional context files
-        llm: LLM service
+        conversation_history: Previous conversation in JSON format
+        supervisor: Supervisor agent
+        parser: Parser service
         current_user: Authenticated user info
     """
     try:
-        system_prompt = (
-            "You are a helpful AI assistant. "
-            "Respond concisely and professionally."
+        # Parse conversation history
+        history = json.loads(conversation_history)
+
+        # Process files if any are included
+        processed_files = []
+        if hasattr(chat_message, 'files') and chat_message.files:
+            processed_files = await process_files(chat_message.files, parser)
+
+        # Process the message through supervisor
+        result = await supervisor.process_message(
+            user_id=current_user["user_id"],
+            message=chat_message.content,
+            conversation_history=history,
+            files=processed_files if processed_files else None
         )
 
-        response = await llm.generate(system_prompt, chat_message.content)
-        if not response.success:
-            raise HTTPException(status_code=500, detail=response.error)
-
-        return {"message": response.content}
+        return {
+            "response": result["response"],
+            "conversation": result["conversation"],
+            "conversation_id": f"conv_{datetime.now().timestamp()}",
+            "selected_agent": result["selected_agent"]
+        }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/message")
+async def process_message(
+        supervisor: SupervisorAgent,
+        parser: Parser,
+        message: str = Form(...),
+        conversation_id: Optional[str] = Form(None),
+        conversation_history: str = Form("[]"),
+        files: Optional[List[UploadFile]] = File(None),
+        current_user: dict = Depends(get_current_user),
+):
+    """
+    Process a user message through the supervisor agent
+
+    Args:
+        message: User's message text
+        conversation_id: Optional conversation identifier
+        conversation_history: Previous conversation in JSON format
+        files: Optional files attached to the message
+        supervisor: Supervisor agent
+        parser: PDF parser service
+        current_user: Authenticated user info
+
+    Returns:
+        Agent response and updated conversation history
+    """
+    try:
+        # Parse conversation history
+        history = json.loads(conversation_history)
+
+        # Process any uploaded files
+        processed_files = await process_files(files or [], parser)
+
+        # Process the message
+        result = await supervisor.process_message(
+            user_id=current_user["user_id"],
+            message=message,
+            conversation_history=history,
+            files=processed_files if processed_files else None
+        )
+
+        return {
+            "response": result["response"],
+            "conversation": result["conversation"],
+            "conversation_id": conversation_id or f"conv_{datetime.now().timestamp()}",
+            "selected_agent": result["selected_agent"],
+            "error": result["error"]
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conversations")
+async def get_conversations(
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    Get list of user's conversations
+
+    Args:
+        current_user: Authenticated user info
+
+    Returns:
+        List of conversation summaries
+    """
+    # This would typically fetch from a database
+    # For now, return an empty list as placeholder
+    return {"conversations": []}
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(
+        conversation_id: str,
+        current_user: dict = Depends(get_current_user)
+):
+    """
+    Get a specific conversation history
+
+    Args:
+        conversation_id: Conversation identifier
+        current_user: Authenticated user info
+
+    Returns:
+        Complete conversation history
+    """
+    # This would typically fetch from a database
+    # For now, return an empty conversation as placeholder
+    return {
+        "conversation_id": conversation_id,
+        "messages": [],
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat()
+    }
