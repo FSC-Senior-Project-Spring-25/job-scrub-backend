@@ -1,7 +1,8 @@
 import json
+import operator
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Annotated
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
@@ -34,9 +35,10 @@ class EnhancementState(TypedDict):
     user_id: str
     resume_text: str
     resume_keywords: List[str]
-    ats_issues: List[Dict[str, Any]]
-    content_issues: List[Dict[str, Any]]
-    formatting_issues: List[Dict[str, Any]]
+    # Using Annotated with operator.add to enable parallel processing and result accumulation
+    ats_issues: Annotated[List[Dict[str, Any]], operator.add]
+    content_issues: Annotated[List[Dict[str, Any]], operator.add]
+    formatting_issues: Annotated[List[Dict[str, Any]], operator.add]
     enhancement_suggestions: List[SuggestionItem]
     content_quality_score: float
     overall_enhancement_score: float
@@ -89,7 +91,6 @@ class ResumeEnhancementAgent:
 
         # Run the enhancement workflow
         result = await self.workflow.ainvoke(initial_state)
-        print(f"Enhancement result: {result.get('ats_issues')}")
         # Format the response
         return {
             "file_id": resume_data["file_id"],
@@ -306,6 +307,20 @@ class ResumeEnhancementAgent:
 
         return {"formatting_issues": formatting_issues}
 
+    async def _process_content_quality_score(self, state: EnhancementState) -> Dict[str, Any]:
+        """
+        Process and extract content quality score from content analysis results
+
+        Args:
+            state: Current enhancement state
+
+        Returns:
+            Dictionary with content quality score
+        """
+        # Extract the content quality score from the state
+        # This node runs after content analysis to extract just the score
+        return {"content_quality_score": state.get("content_quality_score", 0.75)}
+
     async def _generate_suggestions(self, state: EnhancementState) -> Dict[str, Any]:
         """
         Generate prioritized enhancement suggestions based on all analyses
@@ -381,7 +396,7 @@ class ResumeEnhancementAgent:
 
     def _create_workflow(self) -> CompiledStateGraph:
         """
-        Create and compile the enhancement workflow graph
+        Create and compile the enhancement workflow graph with parallel execution
 
         Returns:
             Compiled workflow graph
@@ -393,14 +408,28 @@ class ResumeEnhancementAgent:
         builder.add_node("analyze_ats_compatibility", self._analyze_ats_compatibility)
         builder.add_node("analyze_content_quality", self._analyze_content_quality)
         builder.add_node("analyze_formatting", self._analyze_formatting)
+        builder.add_node("process_content_quality_score", self._process_content_quality_score)
         builder.add_node("generate_suggestions", self._generate_suggestions)
 
-        # Define workflow edges
+        # Define workflow edges for parallel execution
         builder.add_edge(START, "analyze_resume_keywords")
+
+        # Fan out from keywords analysis to three parallel processes
         builder.add_edge("analyze_resume_keywords", "analyze_ats_compatibility")
-        builder.add_edge("analyze_ats_compatibility", "analyze_content_quality")
-        builder.add_edge("analyze_content_quality", "analyze_formatting")
-        builder.add_edge("analyze_formatting", "generate_suggestions")
+        builder.add_edge("analyze_resume_keywords", "analyze_content_quality")
+        builder.add_edge("analyze_resume_keywords", "analyze_formatting")
+
+        # Extract content quality score for use in generate_suggestions
+        builder.add_edge("analyze_content_quality", "process_content_quality_score")
+
+        # Fan in from all analysis nodes to generate suggestions
+        # We use a list to indicate that all these nodes must complete before continuing
+        builder.add_edge(
+            ["analyze_ats_compatibility", "analyze_content_quality", "analyze_formatting",
+             "process_content_quality_score"],
+            "generate_suggestions"
+        )
+
         builder.add_edge("generate_suggestions", END)
 
         # Compile the workflow
