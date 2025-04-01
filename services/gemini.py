@@ -28,7 +28,6 @@ class GeminiLLM:
             self,
             model: str = "gemini-2.0-flash",
             temperature: float = 0.0,
-            max_tokens: Optional[int] = 512,
             max_retries: int = 2
     ):
         """Initialize Gemini LLM interface
@@ -36,13 +35,11 @@ class GeminiLLM:
         Args:
             model: The Gemini model to use
             temperature: Controls randomness in output (0.0 = deterministic)
-            max_tokens: Maximum number of tokens in response
             max_retries: Number of retry attempts for failed calls
         """
         self.llm = ChatGoogleGenerativeAI(
             model=model,
             temperature=temperature,
-            max_tokens=max_tokens,
             max_retries=max_retries
         )
 
