@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.responses import JSONResponse
 
 from dependencies import LLM, Parser, get_current_user, SupervisorAgent
 from models.chat import ChatMessage
@@ -96,24 +97,9 @@ async def chat_stream(
         print(f"[CHAT_STREAM] Supervisor selected agent: {result['selected_agent']}")
         print(f"[CHAT_STREAM] Response: {result['response'][:100]}..." if result["response"] else "No response")
 
-        # Return the response along with updated conversation history
-        async def direct_stream():
-            if result["response"]:
-                # First yield the full conversation history as a special message
-                yield f"data: {{\"type\":\"history\",\"conversation\":{json.dumps(result['conversation'])}}}\n\n"
-
-                # Then stream the response chunks
-                chunks = [result["response"][i:i + 100] for i in range(0, len(result["response"]), 100)]
-                for chunk in chunks:
-                    yield f"data: {chunk}\n\n"
-                    await asyncio.sleep(0.05)
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(
-            direct_stream(),
-            media_type="text/event-stream"
+        return JSONResponse(
+            content = result
         )
-
     except Exception as e:
         print(f"[CHAT_STREAM] Error: {str(e)}")
         import traceback
