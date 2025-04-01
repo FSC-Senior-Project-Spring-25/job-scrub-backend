@@ -85,6 +85,7 @@ async def lifespan(app: FastAPI):
     )
     supervisor_agent = SupervisorAgent(
         llm=gemini_llm,
+        pc=pc,
         resume_matcher=resume_matching_agent,
         resume_enhancer=enhancement_agent,
         user_profile_agent=user_profile_agent,

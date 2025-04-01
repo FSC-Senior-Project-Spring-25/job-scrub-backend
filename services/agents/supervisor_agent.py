@@ -5,11 +5,13 @@ from typing import Dict, List, Optional, Any
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
+from pinecone import Pinecone
 
 from models.chat import Message
 from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.chat_handler import handle_chat
+from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
 from services.gemini import GeminiLLM, ResponseFormat
 
@@ -43,11 +45,13 @@ class SupervisorAgent:
     def __init__(
             self,
             llm: GeminiLLM,
+            pc: Pinecone,
             resume_matcher: ResumeMatchingAgent,
             resume_enhancer: ResumeEnhancementAgent,
             user_profile_agent: UserProfileAgent,
     ):
         self.llm = llm
+        self.pc = pc
         self.resume_matcher = resume_matcher
         self.resume_enhancer = resume_enhancer
         self.user_profile_agent = user_profile_agent
@@ -241,7 +245,7 @@ class SupervisorAgent:
                 question = params.get("question", state.current_message)
 
                 # Call the user profile agent to analyze the question
-                result = await self.user_profile_agent.analyze_user_question(
+                result = await self.user_profile_agent.process_user_query(
                     user_id=state.user_id,
                     question=question
                 )
@@ -267,7 +271,7 @@ class SupervisorAgent:
                     if not resume_file:
                         # Try to fetch the user's resume from Pinecone
                         print(f"[SUPERVISOR] No resume file provided, fetching from Pinecone for user: {state.user_id}")
-                        user_resume = await self.user_profile_agent.get_user_resume_data(state.user_id)
+                        user_resume = await get_user_resume(index=self.pc.Index("resumes"), user_id=state.user_id)
 
                         if not user_resume or not user_resume.get("text"):
                             return {
@@ -314,26 +318,44 @@ class SupervisorAgent:
                     user_id=user_id,
                 )
 
-                print(f"[SUPERVISOR] Resume enhancer results: {result['overall_enhancement_score']}")
+                print(f"[SUPERVISOR] Resume enhancer results: {result['content_quality_score']}")
 
-                # Format enhancement suggestions
+                # Format all issues and suggestions
+                ats_issues = "\n".join([
+                    f"- {issue['impact'].upper()}: {issue['issue']} - {issue['recommendation']}"
+                    for issue in result["ats_issues"]
+                ])
+
+                content_issues = "\n".join([
+                    f"- {issue['impact'].upper()}: {issue['issue']}\nRecommendation: {issue['recommendation']}\nExample: {issue['example']}"
+                    for issue in result["content_issues"]
+                ])
+
+                formatting_issues = "\n".join([
+                    f"- {issue['impact'].upper()}: {issue['issue']} - {issue['recommendation']}"
+                    for issue in result["formatting_issues"]
+                ])
+
                 suggestions = "\n".join([
-                    f"- {s['priority'].upper()}: {s['description']} ({s['section']})"
+                    f"- {s['priority'].upper()}: {s['description']} ({s['section']})\n  Examples: {', '.join(s['examples'])}"
                     for s in result["enhancement_suggestions"]
                 ])
 
                 response = (
-                    f"Resume Enhancement Suggestions:\n"
-                    f"Overall Enhancement Score: {result['overall_enhancement_score']:.2f}\n\n"
-                    f"Key Suggestions:\n{suggestions}\n\n"
-                    f"Would you like detailed examples for any of these suggestions?"
+                    f"Resume Analysis Results\n"
+                    f"======================\n\n"
+                    f"Overall Content Score: {result['content_quality_score']:.2f}\n"
+                    f"ATS Compatibility Issues:\n{ats_issues}\n\n"
+                    f"Content Quality Issues:\n{content_issues}\n\n"
+                    f"Formatting Issues:\n{formatting_issues}\n\n"
+                    f"Key Enhancement Suggestions:\n{suggestions}\n\n"
+                    f"Would you like me to explain any of these suggestions in more detail?"
                 )
 
                 return {"agent_response": response}
 
             else:  # Default to chat
                 print(f"[SUPERVISOR] Using chat handler with message: {state.current_message[:50]}...")
-
                 # Handle general chat - pass the llm instance
                 response = await handle_chat(
                     llm=self.llm,
@@ -341,7 +363,7 @@ class SupervisorAgent:
                     conversation_history=state.conversation_history,
                     files=state.files
                 )
-
+                print(f"[SUPERVISOR] Chat handler response: {response}")
                 return {"agent_response": response}
 
         except Exception as e:
