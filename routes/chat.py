@@ -1,4 +1,3 @@
-import asyncio
 import json
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -8,7 +7,6 @@ from fastapi.responses import StreamingResponse
 from starlette.responses import JSONResponse
 
 from dependencies import LLM, Parser, get_current_user, SupervisorAgent
-from models.chat import ChatMessage
 
 router = APIRouter()
 
@@ -98,7 +96,7 @@ async def chat_stream(
         print(f"[CHAT_STREAM] Response: {result['response'][:100]}..." if result["response"] else "No response")
 
         return JSONResponse(
-            content = result
+            content=result
         )
     except Exception as e:
         print(f"[CHAT_STREAM] Error: {str(e)}")
@@ -108,52 +106,6 @@ async def chat_stream(
             iter([f"data: Error: {str(e)}\n\n"]),
             media_type="text/event-stream"
         )
-
-
-@router.post("")
-async def chat(
-        supervisor: SupervisorAgent,
-        parser: Parser,
-        chat_message: ChatMessage,
-        conversation_history: str = Form("[]"),
-        current_user: dict = Depends(get_current_user),
-):
-    """
-    Non-streaming chat endpoint for simple requests
-
-    Args:
-        chat_message: Message content and optional context files
-        conversation_history: Previous conversation in JSON format
-        supervisor: Supervisor agent
-        parser: Parser service
-        current_user: Authenticated user info
-    """
-    try:
-        # Parse conversation history
-        history = json.loads(conversation_history)
-
-        # Process files if any are included
-        processed_files = []
-        if hasattr(chat_message, 'files') and chat_message.files:
-            processed_files = await process_files(chat_message.files, parser)
-
-        # Process the message through supervisor
-        result = await supervisor.process_message(
-            user_id=current_user["user_id"],
-            message=chat_message.content,
-            conversation_history=history,
-            files=processed_files if processed_files else None
-        )
-
-        return {
-            "response": result["response"],
-            "conversation": result["conversation"],
-            "conversation_id": f"conv_{datetime.now().timestamp()}",
-            "selected_agent": result["selected_agent"]
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/message")
