@@ -14,27 +14,23 @@ class S3Service:
         self.bucket_name = bucket_name
         self.s3 = client
 
-    async def upload_file(self, file: UploadFile, user_id: str, max_size_mb: int = 5) -> str:
+    async def upload_file(self, file: UploadFile, user_id: str, content_type: str = None, max_size_mb: int = 5) -> str:
         """
         Upload a file to S3 with user ownership metadata
 
         Args:
             file: The file to upload
             user_id: The ID of the user uploading the file
+            content_type: The content type of the file
             max_size_mb: Maximum file size in MB
 
         Returns:
             The unique S3 key for the uploaded file
-
-        Raises:
-            HTTPException: If file upload fails or validation errors occur
         """
-        # Create a unique filename that includes the user ID to enforce ownership
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         unique_filename = f"resumes/{user_id}/{timestamp}-{uuid.uuid4()}.pdf"
 
         try:
-            # Read file content
             file_content = await file.read()
 
             if len(file_content) > max_size_mb * 1024 * 1024:
@@ -43,12 +39,14 @@ class S3Service:
                     detail=f"File size exceeds {max_size_mb}MB limit"
                 )
 
-            # Upload file to S3 with metadata to track ownership
+            # Use provided content type or default to application/pdf
+            file_content_type = content_type or 'application/pdf'
+
             self.s3.put_object(
                 Bucket=self.bucket_name,
                 Key=unique_filename,
                 Body=file_content,
-                ContentType='application/pdf',
+                ContentType=file_content_type,
                 Metadata={
                     'user_id': user_id
                 }
