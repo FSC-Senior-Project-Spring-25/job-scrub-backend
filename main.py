@@ -25,6 +25,7 @@ from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 from routes.posts import router as posts_router
 from routes.auth import router as auth_router
+from routes.follows import router as follows_router
 
 load_dotenv()
 
@@ -86,6 +87,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(posts_router, prefix="/api", tags=["posts"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(follows_router, prefix="/follows", tags=["Follows"])
 
 # middleware to set request context
 app.add_middleware(RequestContextMiddleware)
