@@ -152,7 +152,7 @@ async def process_message(
             "response": result["response"],
             "conversation": result["conversation"],
             "conversation_id": conversation_id or f"conv_{datetime.now().timestamp()}",
-            "selected_agent": result["selected_agent"],
+            "selected_agent": result["active_agents"],
             "error": result["error"]
         }
 
