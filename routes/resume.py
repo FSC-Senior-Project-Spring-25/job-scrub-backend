@@ -158,3 +158,22 @@ async def delete_resume(
 
     # Must have failed to delete
     raise HTTPException(status_code=500, detail="Failed to delete file")
+
+@router.get("/keywords")
+async def get_resume_keywords(
+    pinecone: PineconeClient,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["user_id"]
+    resume_index = pinecone.Index("resumes")
+
+    try:
+        result = resume_index.fetch(ids=[user_id], namespace="resumes")
+        vector = result.vectors.get(user_id)
+        if not vector:
+            raise HTTPException(status_code=404, detail="Resume not found in Pinecone")
+
+        keywords = vector.metadata.get("keywords", [])
+        return {"keywords": keywords}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Pinecone error: {str(e)}")
