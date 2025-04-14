@@ -1,19 +1,19 @@
 from datetime import datetime
 from typing import List, Dict, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from dependencies import get_current_user, Firestore
+from dependencies import Firestore, CurrentUser
 from models.post import Post, CommentRequest
 
 router = APIRouter()
 
 
 @router.get("/posts")
-async def get_posts(db: Firestore, current_user: dict = Depends(get_current_user)) -> List[Dict[str, Any]]:
+async def get_posts(db: Firestore, current_user: CurrentUser) -> List[Dict[str, Any]]:
     """Get all posts with user-specific like status"""
     posts = db.get_all_posts()
-    user_id = current_user["user_id"]
+    user_id = current_user.user_id
 
     # Fetch user's like status for each post
     for post in posts:
@@ -33,10 +33,10 @@ async def get_posts(db: Firestore, current_user: dict = Depends(get_current_user
 async def create_post(
         db: Firestore,
         post_data: Post,
-        current_user: dict = Depends(get_current_user)
+        current_user: CurrentUser
 ) -> Dict[str, Any]:
     """Create a new post"""
-    author = current_user["email"]
+    author = current_user.email
     post_id = db.create_post(author, post_data.content)
 
     return {
@@ -53,10 +53,10 @@ async def create_post(
 async def toggle_like(
         db: Firestore,
         post_id: str,
-        current_user: dict = Depends(get_current_user)
+        current_user: CurrentUser
 ) -> Dict[str, Any]:
     """Toggle like status for a post"""
-    user_id = current_user["user_id"]
+    user_id = current_user.user_id
 
     # Check if user has already liked this post
     already_liked = db.user_has_liked_post(post_id, user_id)
@@ -82,10 +82,10 @@ async def add_comment(
         db: Firestore,
         post_id: str,
         comment: CommentRequest,
-        current_user: dict = Depends(get_current_user)
+        current_user: CurrentUser
 ) -> Dict[str, Any]:
     """Add a comment to a post"""
-    author = current_user["email"]
+    author = current_user.email
     comment_id = db.add_comment(post_id, author, comment.text)
 
     return {
