@@ -19,6 +19,7 @@ from routes.chat import router as chat_router
 from routes.jobs import router as jobs_router
 from routes.posts import router as posts_router
 from routes.resume import router as resume_router
+from routes.follows import router as follows_router
 from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.supervisor_agent import SupervisorAgent
@@ -131,3 +132,4 @@ app.include_router(resume_router, prefix="/resume", tags=["resume"])
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(posts_router, prefix="/api", tags=["posts"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(follows_router, prefix="/users", tags=["follows"])
