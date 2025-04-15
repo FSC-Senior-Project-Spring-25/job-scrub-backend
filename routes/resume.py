@@ -131,12 +131,6 @@ async def view_resume(
         key: str,
         current_user: CurrentUser,
 ):
-    user_id = current_user.user_id  # Firebase UID
-
-    # Security check: Ensure the user can only access their own files
-    if not key.startswith(f"resumes/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not authorized to access this file")
-
     url = await s3_service.get_presigned_url(key)
     return JSONResponse(content={"url": url})
 
