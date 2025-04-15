@@ -373,16 +373,17 @@ class SupervisorAgent:
 
     async def _synthesize_response(self, state: SupervisorState) -> Dict[str, Any]:
         """
-        Synthesize the results from multiple agents into a coherent markdown response
+        Synthesize the results from multiple agents into a coherent response focused on the user's query
 
         Args:
             state: Current supervisor state with agent results
 
         Returns:
-            Updated state with final response
+            Updated state with final focused response
         """
         active_agents = state.active_agents
         agent_results = state.agent_results
+        user_query = state.current_message
 
         # If there was an error and no agent results, return the error
         if state.error and not agent_results:
@@ -396,112 +397,95 @@ class SupervisorAgent:
             return {"final_response": chat_result["response"]}
 
         # For complex responses requiring synthesis from multiple agents
-        synthesis_prompt = "Synthesize the following agent results into a well-formatted markdown response:\n\n"
+        synthesis_prompt = f"""
+        Synthesize the following agent results into a well-formatted markdown response that directly addresses the user's query:
 
-        # Add results from each agent to the prompt
+        USER QUERY:
+        {user_query}
+
+        Focus on providing a response that actually answers what the user is asking. Only include information that is relevant to their specific question.
+        """
+
+        # Add relevant results from each agent to the prompt, but keeping focus on the user's query
         if "user_profile" in agent_results:
             profile_result = agent_results["user_profile"]
-            if "error" in profile_result:
-                synthesis_prompt += f"USER PROFILE ERROR: {profile_result['error']}\n\n"
-            else:
-                synthesis_prompt += f"USER PROFILE INFORMATION:\n{profile_result.get('answer', '')}\n\n"
+            if "error" not in profile_result:
+                synthesis_prompt += f"\nUSER PROFILE INFORMATION:\n{profile_result.get('answer', '')}\n"
 
         if "resume_matcher" in agent_results:
             matcher_result = agent_results["resume_matcher"]
-            if "error" in matcher_result:
-                synthesis_prompt += f"RESUME MATCHER ERROR: {matcher_result['error']}\n\n"
-            else:
-                synthesis_prompt += (
-                    f"RESUME MATCHER RESULTS:\n"
-                    f"- Match Score: {matcher_result.get('match_score')}\n"
-                    f"- Keyword Coverage: {matcher_result.get('keyword_coverage')}\n"
-                    f"- Missing Keywords: {', '.join(matcher_result.get('missing_keywords', []))}\n\n"
-                )
+            if "error" not in matcher_result:
+                synthesis_prompt += "\nRESUME MATCHER RESULTS:\n"
+                # Include only the most relevant parts for job matching
+                synthesis_prompt += f"- Match Score: {matcher_result.get('match_score')}\n"
+                if "missing_keywords" in matcher_result and matcher_result["missing_keywords"]:
+                    synthesis_prompt += f"- Missing Keywords: {', '.join(matcher_result.get('missing_keywords', []))}\n"
 
         if "resume_enhancer" in agent_results:
             enhancer_result = agent_results["resume_enhancer"]
-            if "error" in enhancer_result:
-                synthesis_prompt += f"RESUME ENHANCER ERROR: {enhancer_result['error']}\n\n"
-            else:
-                # Add enhancement information
-                synthesis_prompt += (
-                    f"RESUME ENHANCER RESULTS:\n"
-                    f"- Content Quality Score: {enhancer_result.get('content_quality_score')}\n"
-                    f"- ATS Issues: {len(enhancer_result.get('ats_issues', []))}\n"
-                    f"- Content Issues: {len(enhancer_result.get('content_issues', []))}\n"
-                    f"- Formatting Issues: {len(enhancer_result.get('formatting_issues', []))}\n"
-                    f"- Enhancement Suggestions: {len(enhancer_result.get('enhancement_suggestions', []))}\n\n"
-                )
+            if "error" not in enhancer_result:
+                # Check what areas the user was asking about
+                query_context = enhancer_result.get("query_context", "")
+                focus_areas = enhancer_result.get("focus_areas", [])
 
-                # Add more detailed enhancement data
-                for issue_type in ['ats_issues', 'content_issues', 'formatting_issues']:
-                    if issue_type in enhancer_result and enhancer_result[issue_type]:
-                        synthesis_prompt += f"DETAILED {issue_type.upper()}:\n"
-                        for issue in enhancer_result[issue_type]:
-                            synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
-                            synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
-                            if 'example' in issue:
-                                synthesis_prompt += f"  Example: {issue.get('example')}\n"
-                        synthesis_prompt += "\n"
+                synthesis_prompt += "\nRESUME ENHANCER RESULTS:\n"
 
-                if 'enhancement_suggestions' in enhancer_result:
+                # Only include information about areas the user asked about
+                if "ats" in query_context.lower() and "ats_issues" in enhancer_result:
+                    synthesis_prompt += "ATS ISSUES:\n"
+                    for issue in enhancer_result["ats_issues"]:
+                        synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
+                        synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
+
+                if any(term in query_context.lower() for term in
+                       ["content", "wording", "language"]) and "content_issues" in enhancer_result:
+                    synthesis_prompt += "CONTENT ISSUES:\n"
+                    for issue in enhancer_result["content_issues"]:
+                        synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
+                        synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
+
+                if any(term in query_context.lower() for term in
+                       ["format", "layout", "structure"]) and "formatting_issues" in enhancer_result:
+                    synthesis_prompt += "FORMATTING ISSUES:\n"
+                    for issue in enhancer_result["formatting_issues"]:
+                        synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
+                        synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
+
+                # Always include enhancement suggestions but filter them by relevance
+                if "enhancement_suggestions" in enhancer_result:
                     synthesis_prompt += "ENHANCEMENT SUGGESTIONS:\n"
-                    for suggestion in enhancer_result['enhancement_suggestions']:
-                        synthesis_prompt += f"- {suggestion.get('priority', 'Medium').upper()}: {suggestion.get('description')} ({suggestion.get('section')})\n"
-                        if 'examples' in suggestion:
-                            synthesis_prompt += f"  Examples: {', '.join(suggestion.get('examples', []))}\n"
-                    synthesis_prompt += "\n"
+                    for suggestion in enhancer_result["enhancement_suggestions"]:
+                        # Only include suggestions relevant to the focus areas
+                        if not focus_areas or suggestion.get("section", "").lower() in [area.lower() for area in
+                                                                                        focus_areas]:
+                            synthesis_prompt += f"- {suggestion.get('priority', 'Medium').upper()}: {suggestion.get('description')} ({suggestion.get('section')})\n"
+                            if "examples" in suggestion:
+                                synthesis_prompt += f"  Examples: {', '.join(suggestion.get('examples', []))}\n"
 
-        # Add instructions for synthesis
+        # Add instructions for synthesis focused on relevance to the user's query
         synthesis_prompt += """
         Guidelines for response formatting:
         1. Use proper markdown formatting with headers, lists, and emphasis
-        2. Organize the information in a logical flow
-        3. Start with a brief summary of findings
-        4. Group related information together
-        5. Use bullet points for lists of issues or suggestions
-        6. Include a conclusion with next steps
-        7. If there were errors in any agent, acknowledge them briefly
-        8. Make sure the response flows naturally as if from a single intelligence
-        9. The tone should be professional but friendly
-        10. Use markdown formatting to highlight important information
+        2. Start with a direct answer to the user's specific question
+        3. Include ONLY information relevant to what the user asked about
+        4. Use bullet points for lists of issues or suggestions
+        5. Keep the response concise and focused
+        6. Make sure to directly address what the user was asking
+        7. Don't include information that wasn't asked for
 
-        Important: The response should be well-structured and appear as if it came from a single intelligent assistant, not multiple separate agents.
+        Important: The response should be well-structured, focused only on answering what the user asked,
+        and appear as if it came from a single intelligent assistant.
         """
 
         # Generate synthesized response
         response = await self.llm.generate(
-            system_prompt="You are an expert resume consultant that integrates information from multiple analysis tools. Format your response using proper markdown to ensure it's readable and professional.",
+            system_prompt="You are an expert resume consultant that provides focused, relevant answers to user questions.",
             user_message=synthesis_prompt
         )
 
         if not response.success:
-            # Fallback to a simple concatenation of results
-            final_response = "I'm sorry, I couldn't properly synthesize the results, but here's what I found:\n\n"
-
-            for agent_name, result in agent_results.items():
-                if "error" in result:
-                    final_response += f"**{agent_name.replace('_', ' ').title()} Error:** {result['error']}\n\n"
-                elif agent_name == "chat":
-                    final_response += f"{result['response']}\n\n"
-                elif agent_name == "user_profile":
-                    final_response += f"**Profile Information:**\n{result.get('answer', '')}\n\n"
-                elif agent_name == "resume_matcher":
-                    final_response += (
-                        f"**Resume Match Results:**\n"
-                        f"- Match Score: {result.get('match_score')}\n"
-                        f"- Keyword Coverage: {result.get('keyword_coverage')}\n"
-                        f"- Missing Keywords: {', '.join(result.get('missing_keywords', []))}\n\n"
-                    )
-                elif agent_name == "resume_enhancer":
-                    final_response += (
-                        f"**Resume Enhancement Results:**\n"
-                        f"- Content Quality Score: {result.get('content_quality_score')}\n"
-                        f"- Found {len(result.get('ats_issues', []))} ATS issues\n"
-                        f"- Found {len(result.get('content_issues', []))} content issues\n"
-                        f"- Found {len(result.get('formatting_issues', []))} formatting issues\n"
-                        f"- {len(result.get('enhancement_suggestions', []))} enhancement suggestions\n\n"
-                    )
+            # Fallback to a simple response
+            final_response = "I'm sorry, I couldn't properly synthesize the results for your specific question."
         else:
             final_response = response.content
 
