@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from pinecone import Pinecone
 from services.agents.tools.get_user_resume import get_user_resume
+from services.gemini import GeminiLLM, ResponseFormat
 
 load_dotenv()
 
@@ -42,43 +43,44 @@ class ResumeEnhancementResponse(BaseModel):
         default_factory=list, description="Identified formatting issues"
     )
 
+gemini_llm = GeminiLLM()
 
 #############################################
 # Define a Single Tool for Formatting Analysis
 #############################################
-@tool
-def analyze_formatting_tool(tool_call_id: Optional[str] = None, resume_text: Optional[str] = None) -> Dict[str, Any]:
+@tool(parse_docstring=True)
+def analyze_formatting_tool(resume_text: Optional[str] = None) -> Dict[
+    str, Any]:
     """
     Analyze the resume for formatting issues.
 
     Args:
-        tool_call_id: A unique identifier for this tool call.
-        resume_text: The complete resume text provided as input.
+        resume_text: The complete resume text provided as input
 
     Returns:
-        A dictionary update containing the resume_text, list of formatting issues, and a log message.
+        A dictionary containing formatting issues and messages
     """
-    if tool_call_id is None:
-        tool_call_id = "default_tool_call_id"
-    if not resume_text:
-        tm = ToolMessage(
-            content="No resume text provided.",
-            name="analyze_formatting_tool",
-            tool_call_id=tool_call_id
-        )
-        return {"resume_text": "", "formatting_issues": [], "messages": [tm]}
-
-    print("Analyzing formatting...", tool_call_id, "Resume length:", len(resume_text))
-    issues = [
-        {"issue": "Inconsistent bullet points", "severity": "low"},
-        {"issue": "Irregular spacing", "severity": "medium"}
-    ]
-    tm = ToolMessage(
-        content=f"Formatting analysis found {len(issues)} issues.",
-        name="analyze_formatting_tool",
-        tool_call_id=tool_call_id
+    system_prompt = (
+        "You are a resume formatting expert. Analyze the resume text for formatting issues "
+        "like inconsistent bullets, irregular spacing, alignment problems."
     )
-    return {"resume_text": resume_text, "formatting_issues": issues, "messages": [tm]}
+
+    user_message = f"Resume text to analyze:\n{resume_text}"
+
+    response = gemini_llm.generate(
+        system_prompt=system_prompt,
+        user_message=user_message,
+        response_format=ResponseFormat.JSON
+    )
+    print("Response from Gemini:", response)
+    if not response.success:
+        raise ValueError(response.error)
+
+    issues = response.content.get("formatting_issues", [])
+
+    return {
+        "formatting_issues": issues,
+    }
 
 
 tools = [analyze_formatting_tool]
@@ -86,7 +88,7 @@ tools = [analyze_formatting_tool]
 #############################################
 # Initialize ChatGoogleGenerativeAI and Bind Tools
 #############################################
-llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.0)
+llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.5)
 llm_with_tools = llm.bind_tools(tools)
 
 
