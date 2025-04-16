@@ -140,6 +140,34 @@ class GeminiLLM:
                 error=f"Generation failed: {str(e)}"
             )
 
+    def generate(
+            self,
+            system_prompt: str,
+            user_message: str,
+            response_format: ResponseFormat = ResponseFormat.RAW
+    ) -> GeminiResponse:
+        """Generate a response from Gemini
+
+        Args:
+            system_prompt: System instruction prompt
+            user_message: User's input message
+            response_format: Desired format for the response
+
+        Returns:
+            GeminiResponse object containing the response
+        """
+        try:
+            messages = self._create_messages(system_prompt, user_message, response_format)
+            response = self.chat.invoke(messages)
+            return self._parse_response(response.content, response_format)
+        except Exception as e:
+            return GeminiResponse(
+                content="" if response_format == ResponseFormat.RAW else {},
+                raw_response="",
+                success=False,
+                error=f"Generation failed: {str(e)}"
+            )
+
     async def generate_stream(
             self,
             system_prompt: str,
