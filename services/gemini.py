@@ -37,7 +37,7 @@ class GeminiLLM:
             temperature: Controls randomness in output (0.0 = deterministic)
             max_retries: Number of retry attempts for failed calls
         """
-        self.llm = ChatGoogleGenerativeAI(
+        self.chat = ChatGoogleGenerativeAI(
             model=model,
             temperature=temperature,
             max_retries=max_retries
@@ -130,7 +130,7 @@ class GeminiLLM:
         """
         try:
             messages = self._create_messages(system_prompt, user_message, response_format)
-            response = await self.llm.ainvoke(messages)
+            response = await self.chat.ainvoke(messages)
             return self._parse_response(response.content, response_format)
         except Exception as e:
             return GeminiResponse(
@@ -158,7 +158,7 @@ class GeminiLLM:
         """
         try:
             messages = self._create_messages(system_prompt, user_message, response_format)
-            stream = self.llm.astream(messages)  # Don't await here
+            stream = self.chat.astream(messages)  # Don't await here
 
             buffer = ""
             async for chunk in stream:  # Stream directly
