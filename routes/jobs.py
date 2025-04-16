@@ -32,3 +32,9 @@ async def get_unverified_jobs(
 ):
     jobs = await job_service.get_unverified_jobs(limit=limit)
     return jobs
+
+# new route for fetching all jobs
+@router.get("/all_jobs")
+async def get_all_jobs(job_service: JobVerifier):
+    jobs = await job_service.get_all_jobs()
+    return jobs
