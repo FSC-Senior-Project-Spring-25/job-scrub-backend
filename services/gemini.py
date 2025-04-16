@@ -112,7 +112,7 @@ class GeminiLLM:
                 error=f"Failed to parse JSON response: {str(e)}"
             )
 
-    async def generate(
+    async def agenerate(
             self,
             system_prompt: str,
             user_message: str,

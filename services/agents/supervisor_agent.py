@@ -194,7 +194,7 @@ class SupervisorAgent:
         }}
         """
 
-        response = await self.llm.generate(
+        response = await self.llm.agenerate(
             system_prompt="You are an intelligent routing system for a resume improvement platform. You analyze requests to determine which specialized agents should handle different parts of the request.",
             user_message=routing_prompt,
             response_format=ResponseFormat.JSON
@@ -478,7 +478,7 @@ class SupervisorAgent:
         """
 
         # Generate synthesized response
-        response = await self.llm.generate(
+        response = await self.llm.agenerate(
             system_prompt="You are an expert resume consultant that provides focused, relevant answers to user questions.",
             user_message=synthesis_prompt
         )

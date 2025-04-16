@@ -181,7 +181,7 @@ class UserProfileAgent:
         If certain information is not available, use null for that field.
         """
 
-        response = await self.llm.generate(
+        response = await self.llm.agenerate(
             system_prompt="You are an expert resume analyst tasked with extracting structured information from resume text.",
             user_message=prompt,
             response_format=ResponseFormat.JSON
@@ -350,7 +350,7 @@ class UserProfileAgent:
         and suggest what information they might want to add.
         """
 
-        response = await self.llm.generate(
+        response = await self.llm.agenerate(
             system_prompt="You are a helpful assistant analyzing a user's resume data to answer their questions.",
             user_message=prompt,
             response_format=ResponseFormat.RAW
