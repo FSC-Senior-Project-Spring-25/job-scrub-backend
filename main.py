@@ -28,6 +28,7 @@ from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
+from routes.user_search import router as user_search_router
 
 load_dotenv()
 
