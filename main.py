@@ -29,6 +29,8 @@ from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
+from routes.user_search import router as user_search_router
+from routes.follows import router as follows_router
 
 load_dotenv()
 
@@ -124,4 +126,8 @@ app.include_router(resume_router, prefix="/resume", tags=["resume"])
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(posts_router, prefix="/api", tags=["posts"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
+
+app.include_router(user_search_router, prefix="/users")
+
 app.include_router(follows_router, prefix="/users", tags=["follows"])
+

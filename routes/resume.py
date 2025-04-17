@@ -153,12 +153,14 @@ async def delete_resume(
     # Must have failed to delete
     raise HTTPException(status_code=500, detail="Failed to delete file")
 
+
 @router.get("/keywords")
 async def get_resume_keywords(
     pinecone: PineconeClient,
     current_user: CurrentUser,
 ):
     user_id = current_user.user_id
+    
     resume_index = pinecone.Index("resumes")
 
     try:

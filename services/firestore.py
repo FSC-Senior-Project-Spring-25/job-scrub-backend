@@ -114,3 +114,22 @@ class FirestoreDB:
             c_data["id"] = doc.id
             comments.append(c_data)
         return comments
+    def search_users(self, q: str):
+        """
+        Fetch all users and return those whose email or username
+        contains the query string (case-insensitive).
+        """
+        q_lower = q.strip().lower()
+        users_ref = self.collection("users").stream()
+
+        results = []
+        for doc in users_ref:
+            data = doc.to_dict()
+            email = data.get("email", "") or ""
+            username = data.get("username", "") or ""
+            # case-insensitive substring match
+            if q_lower in email.lower() or q_lower in username.lower():
+                # include the full profile
+                results.append({"id": doc.id, **data})
+
+        return results
