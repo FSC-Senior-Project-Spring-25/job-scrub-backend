@@ -1,10 +1,10 @@
+
 from fastapi import APIRouter, HTTPException, Depends
 from google.cloud import firestore
 from dependencies import Firestore
-print("Follows router loaded!")
 router = APIRouter()
 
-@router.post("/users/{user_id}/follow")
+@router.post("/{user_id}/follow")
 def follow_user(user_id: str, target_id: str, db: Firestore):
     """
     Allows user 'user_id' to follow 'target_id'.
@@ -33,7 +33,7 @@ def follow_user(user_id: str, target_id: str, db: Firestore):
 
     return {"message": f"{user_id} now follows {target_id}"}
 
-@router.post("/users/{user_id}/unfollow")
+@router.post("/{user_id}/unfollow")
 def unfollow_user(user_id: str, target_id: str, db: Firestore):
     """
     Allows user 'user_id' to unfollow 'target_id'.
@@ -51,7 +51,7 @@ def unfollow_user(user_id: str, target_id: str, db: Firestore):
 
     return {"message": f"{user_id} unfollowed {target_id}"}
 
-@router.get("/users/{user_id}/following")
+@router.get("/{user_id}/following")
 def list_following(user_id: str, db: Firestore):
     """
     Returns a list of user IDs that 'user_id' is following.
@@ -64,7 +64,7 @@ def list_following(user_id: str, db: Firestore):
     following_list = [doc.id for doc in following_docs]
     return {"following": following_list}
 
-@router.get("/users/{user_id}/followers")
+@router.get("/{user_id}/followers")
 def list_followers(user_id: str, db: Firestore):
     """
     Returns a list of user IDs who follow 'user_id'.
