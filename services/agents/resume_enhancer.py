@@ -144,11 +144,6 @@ class ResumeEnhancementAgent:
                 '        }\n'
                 '      ]\n'
                 '    },\n'
-                '    "keyword_analysis": {\n'
-                '      "found_keywords": ["string"],\n'
-                '      "missing_keywords": ["string"],\n'
-                '      "keyword_match_rate": number\n'
-                '    },\n'
                 '    "recommendations": ["string"]\n'
                 "  }\n"
                 "}"
