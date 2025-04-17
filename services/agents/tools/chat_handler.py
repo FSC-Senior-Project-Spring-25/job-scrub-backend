@@ -77,7 +77,7 @@ async def handle_chat(
         if not llm:
             return "Error: LLM instance not provided to chat handler"
 
-        response = await llm.generate(
+        response = await llm.agenerate(
             system_prompt=system_prompt,
             user_message=user_prompt,
             response_format=ResponseFormat.RAW

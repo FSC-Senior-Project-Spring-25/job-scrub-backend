@@ -1,440 +1,359 @@
+import asyncio
 import json
-import operator
-from dataclasses import dataclass
-from enum import Enum
-from typing import TypedDict, List, Dict, Any, Annotated
+import os
+from typing import Any, Dict, List, Optional
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.state import CompiledStateGraph
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
+from langchain_core.tools import tool
+from langgraph.graph import StateGraph, START, MessagesState
+from langgraph.prebuilt import ToolNode, tools_condition
 from pinecone import Pinecone
 
 from services.agents.tools.get_user_resume import get_user_resume
 from services.gemini import GeminiLLM, ResponseFormat
-from services.s3 import S3Service
-from services.text_embedder import TextEmbedder
+
+load_dotenv()
 
 
-class EnhancementPriority(Enum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-@dataclass
-class SuggestionItem:
-    """Container for a single resume enhancement suggestion"""
-    description: str
-    priority: EnhancementPriority
-    section: str
-    examples: List[str]
-    reasoning: str
-
-
-class EnhancementState(TypedDict):
-    """State for the resume enhancement workflow"""
-    user_id: str
+class EnhancementState(MessagesState):
+    """
+    The agent state for resume enhancement.
+    It holds the resume text and conversation messages.
+    """
     resume_text: str
-    resume_keywords: List[str]
-    # Using Annotated with operator.add to enable parallel processing and result accumulation
-    ats_issues: Annotated[List[Dict[str, Any]], operator.add]
-    content_issues: Annotated[List[Dict[str, Any]], operator.add]
-    formatting_issues: Annotated[List[Dict[str, Any]], operator.add]
-    enhancement_suggestions: List[SuggestionItem]
-    content_quality_score: float
-    overall_enhancement_score: float
-
+    prompt: str
 
 class ResumeEnhancementAgent:
-    """Agent for analyzing resumes and suggesting general improvements"""
+    def __init__(self, llm: GeminiLLM):
+        """
+        Initializes the ResumeEnhancementAgent.
 
-    def __init__(
-            self,
-            llm: GeminiLLM,
-            text_embedder: TextEmbedder,
-            s3_service: S3Service,
-            resumes_index: Pinecone.Index
-    ):
+        Args:
+            llm: An instance of GeminiLLM.
+        """
         self.llm = llm
-        self.text_embedder = text_embedder
-        self.s3_service = s3_service
-        self.resumes_index = resumes_index
-        self.workflow = self._create_workflow()
 
-    async def enhance_resume(
-            self,
-            user_id: str
-    ) -> Dict[str, Any]:
+        # Create all the tools using the _create_tools method
+        self.tools = self._create_tools()
+
+        # Bind the tools to the LLM
+        self.llm_with_tools = self.llm.chat.bind_tools(self.tools)
+
+        # Build the ReAct agent state graph.
+        self.builder = StateGraph(EnhancementState)
+        self.builder.add_node("think", self.think)
+        self.builder.add_node("tools", ToolNode(self.tools))
+        self.builder.add_edge(START, "think")
+        self.builder.add_conditional_edges("think", tools_condition)
+        self.builder.add_edge("tools", "think")
+        self.agent = self.builder.compile()
+        print("==" * 20)
+        print("Resume Enhancer Graph:")
+        print("==" * 20)
+        self.agent.get_graph().print_ascii()
+
+    def _create_tools(self):
         """
-        Generate general resume enhancement suggestions
-
-        Args:
-            user_id: User identifier
+        Creates and returns all the tools for the ResumeEnhancer.
 
         Returns:
-            Dictionary containing enhancement suggestions and metrics
+            List of tools for the ReAct agent.
         """
-        # Get user's resume data from Pinecone
-        resume_data = await get_user_resume(self.resumes_index, user_id)
-        print(f"Resume data for user {user_id}: {resume_data}")
-        # Initialize workflow state
-        initial_state = EnhancementState(
-            user_id=user_id,
-            resume_text=resume_data["text"],
-            resume_keywords=resume_data["keywords"],
-            ats_issues=[],
-            content_issues=[],
-            formatting_issues=[],
-            enhancement_suggestions=[],
-            content_quality_score=0.0,
-            overall_enhancement_score=0.0
-        )
+        tools = [
+            self._create_analyze_formatting_tool(),
+            self._create_ats_analysis_tool(),
+            self._create_content_quality_tool(),
+            self._create_suggestions_tool()
+        ]
+        return tools
 
-        # Run the enhancement workflow
-        result = await self.workflow.ainvoke(initial_state)
-        # Format the response
-        return {
-            "file_id": resume_data["file_id"],
-            "filename": resume_data["filename"],
-            "content_quality_score": result["content_quality_score"],
-            "overall_enhancement_score": result["overall_enhancement_score"],
-            "ats_issues": result["ats_issues"],
-            "content_issues": result["content_issues"],
-            "formatting_issues": result["formatting_issues"],
-            "enhancement_suggestions": [
-                {
-                    "description": suggestion.description,
-                    "priority": suggestion.priority.value,
-                    "section": suggestion.section,
-                    "examples": suggestion.examples,
-                    "reasoning": suggestion.reasoning
-                }
-                for suggestion in result["enhancement_suggestions"]
-            ]
-        }
+    def _create_analyze_formatting_tool(self):
+        @tool(parse_docstring=True)
+        def analyze_formatting_tool(resume_text: Optional[str] = None) -> Dict[str, Any]:
+            """
+            Analyze the resume for formatting issues.
 
-    async def _analyze_resume_keywords(self, state: EnhancementState) -> EnhancementState:
-        """
-        Analyze keywords in the resume for completeness and quality
+            Args:
+                resume_text: The complete resume text provided as input
 
-        Args:
-            state: Current enhancement state
+            Returns:
+                A dictionary containing formatting issues and messages.
+            """
+            system_prompt = (
+                "You are a resume formatting expert. Analyze the resume text for formatting issues "
+                "like inconsistent bullets, irregular spacing, alignment problems. "
+                "Format your response as a JSON object with the following structure:\n"
+                "{\n"
+                '  "formatting_issues": [\n'
+                "    {\n"
+                '      "type": "string", // Type of issue (bullets, spacing, alignment, etc)\n'
+                '      "severity": "string", // high, medium, or low\n'
+                '      "location": "string", // Section or area where issue occurs\n'
+                '      "description": "string", // Detailed description of the issue\n'
+                '      "fix": "string" // Suggested fix for the issue\n'
+                "    }\n"
+                "  ]\n"
+                "}"
+            )
+            user_message = f"Resume text to analyze:\n{resume_text}"
 
-        Returns:
-            Updated state with keyword analysis
-        """
-        # If keywords weren't already extracted, get them now
-        if not state["resume_keywords"]:
-            kw_response = await self.llm.generate(
-                system_prompt=(
-                    "You are an expert in technical skill extraction. "
-                    "Extract all technical skills, tools, frameworks, programming languages, "
-                    "and industry-specific terms from the provided resume text. "
-                    "Return only a JSON array of keywords, with no explanations."
-                ),
-                user_message=state["resume_text"],
+            response = self.llm.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
                 response_format=ResponseFormat.JSON
             )
-            print("Keyword extraction response:", kw_response)
-            if kw_response.success and isinstance(kw_response.content, dict):
-                # Extract the array from the response
-                if "keywords" in kw_response.content:
-                    state["resume_keywords"] = kw_response.content["keywords"]
-                else:
-                    # If the response is already an array or the first key contains the array
-                    first_key = next(iter(kw_response.content), None)
-                    if first_key:
-                        state["resume_keywords"] = kw_response.content[first_key]
+            print("Response from Gemini (formatting):", response)
+            if not response.success:
+                raise ValueError(response.error)
 
-        return state
+            issues = response.content.get("formatting_issues", [])
+            return {"formatting_issues": issues}
 
-    async def _analyze_ats_compatibility(self, state: EnhancementState) -> Dict[str, Any]:
+        return analyze_formatting_tool
+
+    def _create_ats_analysis_tool(self):
+        @tool(parse_docstring=True)
+        def ats_analysis_tool(resume_text: Optional[str] = None, job_description: Optional[str] = None) -> Dict[
+            str, Any]:
+            """
+            Analyze the resume for ATS compatibility and keyword optimization.
+
+            Args:
+                resume_text: The complete resume text provided as input
+                job_description: Optional job description to analyze keywords against
+
+            Returns:
+                A dictionary containing ATS analysis results.
+            """
+            system_prompt = (
+                "You are an ATS (Applicant Tracking System) expert. Analyze the resume for ATS compatibility "
+                "including keyword optimization, scannable format, and parsability. "
+                "If a job description is provided, evaluate keyword matching against that description. "
+                "Format your response as a JSON object with the following structure:\n"
+                "{\n"
+                '  "ats_analysis": {\n'
+                '    "format_compatibility": {\n'
+                '      "is_parseable": boolean,\n'
+                '      "issues": [\n'
+                '        {\n'
+                '          "type": "string", // headers, tables, images, fonts, etc\n'
+                '          "description": "string",\n'
+                '          "impact": "string" // high, medium, low\n'
+                '        }\n'
+                '      ]\n'
+                '    },\n'
+                '    "recommendations": ["string"]\n'
+                "  }\n"
+                "}"
+            )
+
+            user_message = f"Resume text to analyze:\n{resume_text}"
+            if job_description:
+                user_message += f"\n\nJob description to match against:\n{job_description}"
+
+            response = self.llm.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                response_format=ResponseFormat.JSON
+            )
+            print("Response from Gemini (ATS):", response)
+            if not response.success:
+                raise ValueError(response.error)
+
+            ats_results = response.content.get("ats_analysis", {})
+            return {"ats_analysis": ats_results}
+
+        return ats_analysis_tool
+
+    def _create_content_quality_tool(self):
+        @tool(parse_docstring=True)
+        def content_quality_tool(resume_text: Optional[str] = None) -> Dict[str, Any]:
+            """
+            Analyze the resume content quality including impact statements, clarity, and professionalism.
+
+            Args:
+                resume_text: The complete resume text provided as input
+
+            Returns:
+                A dictionary containing content quality assessment.
+            """
+            system_prompt = (
+                "You are a professional resume content evaluator. Analyze the quality of the resume content "
+                "focusing on the following aspects:\n"
+                "Format your response as a JSON object with the following structure:\n"
+                "{\n"
+                '  "content_quality": {\n'
+                '    "impact_statements": {\n'
+                '      "strengths": ["string"],\n'
+                '      "weaknesses": ["string"],\n'
+                '      "examples_found": ["string"]\n'
+                '    },\n'
+                '    "clarity": {\n'
+                '      "issues": ["string"],\n'
+                '      "improvements": ["string"]\n'
+                '    },\n'
+                '    "language": {\n'
+                '      "professional_terms": ["string"],\n'
+                '      "weak_phrases": ["string"]\n'
+                '    },\n'
+                '    "relevance": {\n'
+                '      "irrelevant_content": ["string"]\n'
+                '    },\n'
+                '    "recommendations": ["string"]\n'
+                "  }\n"
+                "}"
+            )
+            user_message = f"Resume text to analyze:\n{resume_text}"
+
+            response = self.llm.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                response_format=ResponseFormat.JSON
+            )
+            print("Response from Gemini (content quality):", response)
+            if not response.success:
+                raise ValueError(response.error)
+
+            quality_assessment = response.content.get("content_quality", {})
+            return {"content_quality": quality_assessment}
+
+        return content_quality_tool
+
+    def _create_suggestions_tool(self):
+        @tool(parse_docstring=True)
+        def suggestions_tool(
+                resume_text: Optional[str] = None,
+                formatting_issues: Optional[List[Dict[str, Any]]] = None,
+                ats_analysis: Optional[Dict[str, Any]] = None,
+                content_quality: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]:
+            """
+            Generate specific suggestions to improve the resume based on analysis results.
+
+            Args:
+                resume_text: The complete resume text provided as input
+                formatting_issues: Previously identified formatting issues
+                ats_analysis: Results from ATS analysis
+                content_quality: Content quality assessment
+
+            Returns:
+                A dictionary containing specific improvement suggestions.
+            """
+            system_prompt = (
+                "You are a resume improvement expert. Based on the resume text and analysis results, "
+                "provide specific, actionable suggestions to improve the resume. "
+                "Focus on transforming identified issues into concrete improvements. "
+                "Format your response as a JSON object with the following structure:\n"
+                "{\n"
+                '  "improvement_suggestions": [\n'
+                "    {\n"
+                '      "category": "string", // formatting, content, ats, or language\n'
+                '      "priority": "string", // high, medium, or low\n'
+                '      "current_state": "string", // Description of the current issue\n'
+                '      "suggested_change": "string", // Specific change to make\n'
+                '      "expected_impact": "string", // Expected improvement after change\n'
+                '      "section": "string" // Resume section this applies to\n'
+                "    }\n"
+                "  ]\n"
+                "}"
+            )
+
+            # Create a structured analysis summary for the LLM
+            analysis_summary = {
+                "formatting_issues": formatting_issues or [],
+                "ats_analysis": ats_analysis or {},
+                "content_quality": content_quality or {}
+            }
+
+            user_message = (
+                f"Resume text:\n{resume_text}\n\n"
+                f"Analysis results:\n{json.dumps(analysis_summary, indent=2)}\n\n"
+                f"Please provide specific suggestions for improvement."
+            )
+
+            response = self.llm.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                response_format=ResponseFormat.JSON
+            )
+            print("Response from Gemini (suggestions):", response)
+            if not response.success:
+                raise ValueError(response.error)
+
+            suggestions = response.content.get("improvement_suggestions", [])
+            return {"improvement_suggestions": suggestions}
+
+        return suggestions_tool
+
+    def think(self, state: EnhancementState) -> Dict[str, Any]:
         """
-        Analyze resume for ATS (Applicant Tracking System) compatibility issues
-
-        Args:
-            state: Current enhancement state
-
-        Returns:
-            Dictionary with ATS issues and scores
+        Assistant node that evaluates the current state and executes the next required tool
+        without repeating previously used tools.
         """
-        ats_prompt = f"""
-        You are an expert in resume optimization for ATS (Applicant Tracking System) scanning.
-        Analyze the resume below for ATS compatibility issues.
-
-        Focus on:
-        1. Format problems that may confuse ATS systems
-        2. Keyword usage and placement
-        3. Section organization and labeling
-        4. Use of tables, graphics, or unusual formatting that ATS might miss
-        5. File format compatibility issues
-
-        Resume Text:
-        {state['resume_text']}
-
-        Format your response as a JSON object with the following structure:
-        {{
-            "ats_issues": [
-                {{
-                    "issue": "Brief description of the issue",
-                    "impact": "high/medium/low",
-                    "recommendation": "How to fix it"
-                }}
-            ]
-        }}
-
-        Only include actual issues - don't make up problems if the resume is well-formatted.
-        """
-
-        response = await self.llm.generate(
-            system_prompt="You are an expert ATS optimization assistant.",
-            user_message=ats_prompt,
-            response_format=ResponseFormat.JSON
+        resume_text = state.get("resume_text", "")
+        prompt = state.get("prompt", "")
+        sys_msg = SystemMessage(
+            content=(
+                "You are a resume enhancement assistant focused on systematic analysis. "
+                "Important: Do not repeat tools that have already been called. "
+                "Choose tools only based on the user prompt\n"
+                f"User Prompt: {prompt}"
+            )
         )
-        print("ATS analysis response:", response)
-        ats_issues = []
-        if response.success and isinstance(response.content, dict):
-            ats_issues = response.content.get("ats_issues", [])
 
-        return {"ats_issues": ats_issues}
+        messages: list[BaseMessage] = [sys_msg] + state["messages"]
 
-    async def _analyze_content_quality(self, state: EnhancementState) -> Dict[str, Any]:
+        if not messages[-1].content.startswith("Here is a candidate's resume"):
+            messages.append(
+                HumanMessage(
+                    content=(
+                        f"Here is a candidate's resume:\n{resume_text}\n\n"
+                        "Continue the analysis using the next appropriate tool in sequence."
+                    )
+                )
+            )
+
+        invocation = self.llm_with_tools.invoke(messages)
+        return {"messages": [invocation]}
+
+    async def enhance_resume(self, resume_text: str, prompt: str) -> Dict[str, Any]:
         """
-        Analyze resume content quality for general effectiveness
+        Runs the ReAct agent graph using the provided resume text and prints the result.
 
         Args:
-            state: Current enhancement state
-
-        Returns:
-            Dictionary with content issues and content quality score
+            resume_text: The resume text to analyze
+            prompt: The prompt to guide the analysis
         """
-        content_prompt = f"""
-        You are an expert resume writer with deep experience in crafting effective resumes.
-
-        RESUME:
-        {state['resume_text']}
-
-        Analyze this resume for content quality and effectiveness.
-        Focus on:
-
-        1. Achievement descriptions (quantified results vs vague statements)
-        2. Action verbs and impact language
-        3. Technical terminology and clarity
-        4. Overall positioning and narrative focus
-        5. Relevance of included information
-
-        Format your response as a JSON object with:
-        {{
-            "content_issues": [
-                {{
-                    "issue": "Brief description",
-                    "impact": "high/medium/low",
-                    "recommendation": "How to improve",
-                    "example": "Example of improved wording"
-                }}
+        initial_state = {
+            "resume_text": resume_text,
+            "prompt": prompt,
+            "messages": [
+                {"role": "user", "content": prompt}
             ],
-            "content_quality_score": 0.75 // Score from 0.0 to 1.0
-        }}
-
-        Be honest but constructive. Focus on the most important improvements.
-        """
-
-        response = await self.llm.generate(
-            system_prompt="You are an expert resume content optimization assistant.",
-            user_message=content_prompt,
-            response_format=ResponseFormat.JSON
-        )
-        print("Content analysis response:", response)
-
-        content_issues = []
-        content_quality_score = 0.75
-
-        if response.success:
-            content_issues = response.content.get("content_issues", [])
-            content_quality_score = float(response.content.get("content_quality_score", 0.75))
-
+        }
+        result = self.agent.invoke(initial_state)
+        print("Enhancer Final Result:")
+        print(result["messages"][-1].content)
         return {
-            "content_issues": content_issues,
-            "content_quality_score": content_quality_score
+            "answer": result["messages"][-1].content,
+            "error": None
         }
 
-    async def _analyze_formatting(self, state: EnhancementState) -> Dict[str, Any]:
-        """
-        Analyze resume formatting and structure
 
-        Args:
-            state: Current enhancement state
+if __name__ == "__main__":
+    user_id = "oPmOJhSE0VQid56yYyg19hdH5DV2"
+    index = Pinecone(api_key=os.environ["PINECONE_API_KEY"]).Index("resumes")
+    resume_data = asyncio.run(get_user_resume(index, user_id))
+    if not resume_data.get("text"):
+        print("Resume text not found")
+        exit(1)
 
-        Returns:
-            Dictionary with formatting issues
-        """
-        format_prompt = f"""
-        You are an expert resume designer and formatter.
+    # Instantiate GeminiLLM
+    gemini_llm = GeminiLLM()
 
-        Analyze the following resume for formatting and structure issues:
+    # Create the ResumeEnhancer instance
+    enhancer = ResumeEnhancementAgent(gemini_llm)
 
-        {state['resume_text']}
-
-        Focus on:
-        1. Overall structure and readability
-        2. Section organization and hierarchy
-        3. Consistency in formatting
-        4. Use of white space and visual balance
-        5. Length and conciseness
-
-        Format your response as a JSON object with:
-        {{
-            "formatting_issues": [
-                {{
-                    "issue": "Brief description",
-                    "impact": "high/medium/low",
-                    "recommendation": "How to improve"
-                }}
-            ]
-        }}
-
-        Be specific and actionable in your recommendations.
-        """
-
-        response = await self.llm.generate(
-            system_prompt="You are an expert resume formatting assistant.",
-            user_message=format_prompt,
-            response_format=ResponseFormat.JSON
-        )
-        print("Formatting analysis response:", response)
-        formatting_issues = []
-        if response.success and isinstance(response.content, dict):
-            formatting_issues = response.content.get("formatting_issues", [])
-
-        return {"formatting_issues": formatting_issues}
-
-    async def _process_content_quality_score(self, state: EnhancementState) -> Dict[str, Any]:
-        """
-        Process and extract content quality score from content analysis results
-
-        Args:
-            state: Current enhancement state
-
-        Returns:
-            Dictionary with content quality score
-        """
-        # Extract the content quality score from the state
-        # This node runs after content analysis to extract just the score
-        return {"content_quality_score": state.get("content_quality_score", 0.75)}
-
-    async def _generate_suggestions(self, state: EnhancementState) -> Dict[str, Any]:
-        """
-        Generate prioritized enhancement suggestions based on all analyses
-
-        Args:
-            state: Current enhancement state
-
-        Returns:
-            Dictionary with suggestions and overall enhancement score
-        """
-        # Prepare context for the LLM with all analyses
-        context = {
-            "resume_keywords": state["resume_keywords"],
-            "content_quality_score": state["content_quality_score"],
-            "ats_issues": state["ats_issues"],
-            "content_issues": state["content_issues"],
-            "formatting_issues": state["formatting_issues"]
-        }
-
-        suggestion_prompt = f"""
-        You are an expert resume coach helping a candidate improve their general resume quality.
-
-        Based on the following analysis, generate 3-5 high-impact, actionable enhancement suggestions:
-
-        Analysis context:
-        {json.dumps(context, indent=2)}
-
-        Format your response as a JSON object with:
-        {{
-            "enhancement_suggestions": [
-                {{
-                    "description": "Clear, actionable suggestion title",
-                    "priority": "high/medium/low",
-                    "section": "skills/experience/education/summary/etc.",
-                    "examples": ["Example 1", "Example 2"],
-                    "reasoning": "Why this change improves the overall resume quality"
-                }}
-            ],
-            "overall_enhancement_score": 0.68 // Score from 0.0 to 1.0
-        }}
-
-        Prioritize suggestions that will have the biggest impact on the candidate's resume quality.
-        Be specific, constructive, and focus on general best practices for effective resumes.
-        """
-
-        response = await self.llm.generate(
-            system_prompt="You are an expert resume enhancement coach.",
-            user_message=suggestion_prompt,
-            response_format=ResponseFormat.JSON
-        )
-        print("Enhancement suggestions response:", response)
-        enhancement_suggestions = []
-        overall_enhancement_score = 0.0
-
-        if response.success and isinstance(response.content, dict):
-            suggestion_list = response.content.get("enhancement_suggestions", [])
-            overall_enhancement_score = float(response.content.get("overall_enhancement_score", 0.0))
-
-            # Convert dictionary suggestions to SuggestionItem objects
-            for item in suggestion_list:
-                enhancement_suggestions.append(SuggestionItem(
-                    description=item["description"],
-                    priority=EnhancementPriority(item["priority"]),
-                    section=item["section"],
-                    examples=item["examples"],
-                    reasoning=item["reasoning"]
-                ))
-
-        return {
-            "enhancement_suggestions": enhancement_suggestions,
-            "overall_enhancement_score": overall_enhancement_score
-        }
-
-    def _create_workflow(self) -> CompiledStateGraph:
-        """
-        Create and compile the enhancement workflow graph with parallel execution
-
-        Returns:
-            Compiled workflow graph
-        """
-        builder = StateGraph(EnhancementState)
-
-        # Add workflow nodes
-        builder.add_node("analyze_resume_keywords", self._analyze_resume_keywords)
-        builder.add_node("analyze_ats_compatibility", self._analyze_ats_compatibility)
-        builder.add_node("analyze_content_quality", self._analyze_content_quality)
-        builder.add_node("analyze_formatting", self._analyze_formatting)
-        builder.add_node("process_content_quality_score", self._process_content_quality_score)
-        builder.add_node("generate_suggestions", self._generate_suggestions)
-
-        # Define workflow edges for parallel execution
-        builder.add_edge(START, "analyze_resume_keywords")
-
-        # Fan out from keywords analysis to three parallel processes
-        builder.add_edge("analyze_resume_keywords", "analyze_ats_compatibility")
-        builder.add_edge("analyze_resume_keywords", "analyze_content_quality")
-        builder.add_edge("analyze_resume_keywords", "analyze_formatting")
-
-        # Extract content quality score for use in generate_suggestions
-        builder.add_edge("analyze_content_quality", "process_content_quality_score")
-
-        # Fan in from all analysis nodes to generate suggestions
-        # We use a list to indicate that all these nodes must complete before continuing
-        builder.add_edge(
-            ["analyze_ats_compatibility", "analyze_content_quality", "analyze_formatting",
-             "process_content_quality_score"],
-            "generate_suggestions"
-        )
-
-        builder.add_edge("generate_suggestions", END)
-
-        # Compile the workflow
-        workflow = builder.compile()
-        print("General Resume Enhancement Workflow:")
-        print(workflow.get_graph().draw_ascii())
-
-        return workflow
+    # Run the agent graph to analyze the resume with optional job description
+    asyncio.run(enhancer.enhance_resume(resume_data["text"], "Analyze this resume for ATS compatibility and content quality."))

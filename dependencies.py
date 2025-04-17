@@ -6,6 +6,7 @@ from firebase_admin.auth import verify_id_token
 from pinecone import Pinecone
 
 from context import request_context
+from models.user import User
 from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.supervisor_agent import SupervisorAgent
@@ -29,7 +30,7 @@ async def get_session(request: Request) -> ClientSession:
     return request.app.state.session
 
 
-async def get_current_user(request: Request) -> dict[str, str]:
+async def get_current_user(request: Request) -> User:
     """
     Verify Firebase ID token from Authorization header and return user info
     """
@@ -44,10 +45,11 @@ async def get_current_user(request: Request) -> dict[str, str]:
     try:
         # Verify the Firebase ID token
         decoded_token = verify_id_token(token)
-        return {
-            "user_id": decoded_token["uid"],
-            "email": decoded_token.get("email", "")
-        }
+        print(f"Decoded token: {decoded_token}")
+        return User(
+            user_id=decoded_token["uid"],
+            email=decoded_token["email"],
+        )
     except Exception as e:
         print(f"Invalid authentication token: {str(e)}")
         raise HTTPException(
@@ -117,6 +119,7 @@ async def get_supervisor_agent(request: Request) -> SupervisorAgent:
 
 
 # Type annotations for dependency injection (used in non-FastAPI routes with @injectable)
+CurrentUser = Annotated[User, Depends(get_current_user)]
 S3 = Annotated[S3Service, Depends(get_s3_service)]
 Firestore = Annotated[FirestoreDB, Depends(get_firestore)]
 PineconeClient = Annotated[Pinecone, Depends(get_pinecone)]

@@ -23,12 +23,13 @@ async def get_user_resume(index: Pinecone.Index, user_id: str) -> Dict[str, Any]
         # Get metadata from the vector
         if not vector_data.metadata:
             raise ValueError(f"No metadata found in resume vector for user {user_id}")
-
+        print(vector_data)
         return {
             "file_id": vector_data.metadata.get("file_id"),
             "filename": vector_data.metadata.get("filename"),
             "keywords": vector_data.metadata.get("keywords", []),
-            "text": vector_data.metadata.get("text", "")
+            "text": vector_data.metadata.get("text", ""),
+            "vector": vector_data.values,
         }
     except Exception as e:
         raise ValueError(f"Failed to retrieve resume data: {str(e)}")
