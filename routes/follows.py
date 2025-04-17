@@ -14,9 +14,12 @@ def follow_user(user_id: str, target_id: str, db: Firestore):
     user_ref = db.collection("users").document(user_id)
     target_ref = db.collection("users").document(target_id)
 
-    if not user_ref.get().exists:
+    # Verify users exist
+    user_doc = user_ref.get()
+    target_doc = target_ref.get()
+    if not user_doc.exists:
         raise HTTPException(status_code=404, detail="User not found")
-    if not target_ref.get().exists:
+    if not target_doc.exists:
         raise HTTPException(status_code=404, detail="Target user not found")
     if user_id == target_id:
         raise HTTPException(status_code=400, detail="Cannot follow yourself")
@@ -26,9 +29,32 @@ def follow_user(user_id: str, target_id: str, db: Firestore):
     if following_ref.get().exists:
         raise HTTPException(status_code=400, detail="Already following this user")
 
-    # Create follow documents in both subcollections
-    following_ref.set({"dateFollowed": firestore.SERVER_TIMESTAMP})
-    target_ref.collection("followers").document(user_id).set({"dateFollowed": firestore.SERVER_TIMESTAMP})
+    # Get user data
+    user_data = user_doc.to_dict()
+    target_data = target_doc.to_dict()
+    user_username = user_data.get("username", "Unknown")
+    user_email = user_data.get("email", "Unknown")
+    user_profile = user_data.get("profileIcon", "Unknown")
+
+    # Get target user data
+    target_username = target_data.get("username", "Unknown")
+    target_email = target_data.get("email", "Unknown")
+    target_profile = target_data.get("profileIcon", "Unknown")
+
+    # Create follow documents in both subcollections with usernames
+    following_ref.set({
+        "dateFollowed": firestore.SERVER_TIMESTAMP,
+        "username": target_username,
+        "email": target_email,
+        "profileIcon": target_profile
+    })
+
+    target_ref.collection("followers").document(user_id).set({
+        "dateFollowed": firestore.SERVER_TIMESTAMP,
+        "username": user_username,
+        "email": user_email,
+        "profileIcon": user_profile
+    })
 
     return {"message": f"{user_id} now follows {target_id}"}
 
@@ -50,28 +76,59 @@ def unfollow_user(user_id: str, target_id: str, db: Firestore):
 
     return {"message": f"{user_id} unfollowed {target_id}"}
 
+
 @router.get("/{user_id}/following")
 def list_following(user_id: str, db: Firestore):
     """
-    Returns a list of user IDs that 'user_id' is following.
+    Returns a list of users that 'user_id' is following, including their username.
     """
     user_ref = db.collection("users").document(user_id)
     if not user_ref.get().exists:
         raise HTTPException(status_code=404, detail="User not found")
 
     following_docs = user_ref.collection("following").stream()
-    following_list = [doc.id for doc in following_docs]
+    following_list = []
+
+    for doc in following_docs:
+        followed_id = doc.id
+        followed_user = db.collection("users").document(followed_id).get()
+
+        followed_user_dict = followed_user.to_dict()
+        if followed_user.exists:
+            following_list.append({
+                "id": followed_id,
+                "username": followed_user_dict.get("username", "Unknown"),
+                "email": followed_user_dict.get("email", "Unknown"),
+                "profileIcon": followed_user_dict.get("profileIcon")
+            })
+
+
     return {"following": following_list}
+
 
 @router.get("/{user_id}/followers")
 def list_followers(user_id: str, db: Firestore):
     """
-    Returns a list of user IDs who follow 'user_id'.
+    Returns a list of users who follow 'user_id', including their username.
     """
     user_ref = db.collection("users").document(user_id)
     if not user_ref.get().exists:
         raise HTTPException(status_code=404, detail="User not found")
 
     followers_docs = user_ref.collection("followers").stream()
-    followers_list = [doc.id for doc in followers_docs]
+    followers_list = []
+
+    for doc in followers_docs:
+        follower_id = doc.id
+        follower_user = db.collection("users").document(follower_id).get()
+
+        followed_user_dict = follower_user.to_dict()
+        if follower_user.exists:
+            followers_list.append({
+                "id": follower_id,
+                "username": followed_user_dict.get("username", "Unknown"),
+                "email": followed_user_dict.get("email", "Unknown"),
+                "profileIcon": followed_user_dict.get("profileIcon")
+            })
+
     return {"followers": followers_list}
