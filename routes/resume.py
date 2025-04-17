@@ -1,10 +1,10 @@
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from starlette.responses import JSONResponse
 
-from dependencies import MatchingAgent, S3, get_current_user, Parser, LLM, PineconeClient, Embedder
+from dependencies import MatchingAgent, S3, Parser, LLM, PineconeClient, Embedder, CurrentUser
 from services.agents.tools.extract_keywords import extract_keywords
 
 router = APIRouter()
@@ -49,13 +49,13 @@ async def upload_resume(
         llm: LLM,
         pinecone: PineconeClient,
         embedder: Embedder,
+        current_user: CurrentUser,
         file: UploadFile = File(...),
-        current_user: dict = Depends(get_current_user),
 ):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
-    user_id = current_user["user_id"]
+    user_id = current_user.user_id
     resume_index = pinecone.Index("resumes")
 
     # Read file bytes only once
@@ -129,14 +129,8 @@ async def upload_resume(
 async def view_resume(
         s3_service: S3,
         key: str,
-        current_user: dict = Depends(get_current_user),
+        current_user: CurrentUser,
 ):
-    user_id = current_user["user_id"]  # Firebase UID
-
-    # Security check: Ensure the user can only access their own files
-    if not key.startswith(f"resumes/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not authorized to access this file")
-
     url = await s3_service.get_presigned_url(key)
     return JSONResponse(content={"url": url})
 
@@ -145,9 +139,9 @@ async def view_resume(
 async def delete_resume(
         s3_service: S3,
         key: str,
-        current_user: dict = Depends(get_current_user),
+        current_user: CurrentUser,
 ):
-    user_id = current_user["user_id"]  # Firebase UID
+    user_id = current_user.user_id  # Firebase UID
 
     # Security check: Ensure the user can only delete their own files
     if not key.startswith(f"resumes/{user_id}/"):
@@ -163,9 +157,10 @@ async def delete_resume(
 @router.get("/keywords")
 async def get_resume_keywords(
     pinecone: PineconeClient,
-    current_user: dict = Depends(get_current_user),
+    current_user: CurrentUser,
 ):
-    user_id = current_user["user_id"]
+    user_id = current_user.user_id
+    
     resume_index = pinecone.Index("resumes")
 
     try:

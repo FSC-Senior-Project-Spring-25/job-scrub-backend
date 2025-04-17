@@ -2,11 +2,11 @@ import json
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException
+from fastapi import APIRouter, Form, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from starlette.responses import JSONResponse
 
-from dependencies import LLM, Parser, get_current_user, SupervisorAgent
+from dependencies import LLM, Parser, SupervisorAgent, User, CurrentUser
 
 router = APIRouter()
 
@@ -60,19 +60,19 @@ async def generate_chat_response(
 
 @router.post("/stream")
 async def chat_stream(
+        current_user: CurrentUser,
         parser: Parser,
         supervisor: SupervisorAgent,
         message: str = Form(...),
         files: Optional[List[UploadFile]] = File(None),
         conversation_history: str = Form("[]"),
-        current_user: dict = Depends(get_current_user),
 ):
     """
     Stream chat responses with optional file context
     """
     try:
         print(f"[CHAT_STREAM] Processing message: {message[:50]}...")
-        print(f"[CHAT_STREAM] User: {current_user['user_id']}")
+        print(f"[CHAT_STREAM] User: {current_user.user_id}")
         print(f"[CHAT_STREAM] Files: {len(files) if files else 0}")
 
         # Parse conversation history
@@ -86,7 +86,7 @@ async def chat_stream(
         # Process the message through supervisor
         print(f"[CHAT_STREAM] Calling supervisor.process_message")
         result = await supervisor.process_message(
-            user_id=current_user["user_id"],
+            user_id=current_user.user_id,
             message=message,
             conversation_history=history,
             files=processed_files if processed_files else None
@@ -110,13 +110,13 @@ async def chat_stream(
 
 @router.post("/message")
 async def process_message(
+        current_user: CurrentUser,
         supervisor: SupervisorAgent,
         parser: Parser,
         message: str = Form(...),
         conversation_id: Optional[str] = Form(None),
         conversation_history: str = Form("[]"),
         files: Optional[List[UploadFile]] = File(None),
-        current_user: dict = Depends(get_current_user),
 ):
     """
     Process a user message through the supervisor agent
@@ -142,7 +142,7 @@ async def process_message(
 
         # Process the message
         result = await supervisor.process_message(
-            user_id=current_user["user_id"],
+            user_id=current_user.user_id,
             message=message,
             conversation_history=history,
             files=processed_files if processed_files else None
@@ -152,7 +152,7 @@ async def process_message(
             "response": result["response"],
             "conversation": result["conversation"],
             "conversation_id": conversation_id or f"conv_{datetime.now().timestamp()}",
-            "selected_agent": result["selected_agent"],
+            "selected_agent": result["active_agents"],
             "error": result["error"]
         }
 
@@ -162,7 +162,7 @@ async def process_message(
 
 @router.get("/conversations")
 async def get_conversations(
-        current_user: dict = Depends(get_current_user)
+        current_user: CurrentUser,
 ):
     """
     Get list of user's conversations
@@ -181,7 +181,7 @@ async def get_conversations(
 @router.get("/conversations/{conversation_id}")
 async def get_conversation(
         conversation_id: str,
-        current_user: dict = Depends(get_current_user)
+        current_user: CurrentUser,
 ):
     """
     Get a specific conversation history

@@ -20,7 +20,7 @@ async def extract_keywords(
 
     human_prompt = f"Extract keywords from the following: {text}"
 
-    response = await llm.generate(
+    response = await llm.agenerate(
         system_prompt=system_prompt,
         user_message=human_prompt,
         response_format=ResponseFormat.JSON
