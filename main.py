@@ -74,16 +74,8 @@ async def lifespan(app: FastAPI):
         text_embedder=embedder,
         llm=gemini_llm,
     )
-    enhancement_agent = ResumeEnhancementAgent(
-        llm=gemini_llm,
-        text_embedder=embedder,
-        s3_service=s3,
-        resumes_index=resumes_index
-    )
-    user_profile_agent = UserProfileAgent(
-        resumes_index=resumes_index,
-        llm=gemini_llm
-    )
+    enhancement_agent = ResumeEnhancementAgent(llm=gemini_llm)
+    user_profile_agent = UserProfileAgent(llm=gemini_llm)
     supervisor_agent = SupervisorAgent(
         llm=gemini_llm,
         pc=pc,
