@@ -1,9 +1,11 @@
 import asyncio
+import os
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum, Flag
-from typing import Dict, List, Optional, Any, Set
+from enum import Flag
+from typing import Dict, List, Optional, Any
 
+from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 from pinecone import Pinecone
@@ -14,8 +16,11 @@ from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.chat_handler import handle_chat
 from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
-from services.gemini import GeminiLLM, ResponseFormat
+from services.gemini import GeminiLLM
+from services.resume_parser import ResumeParser
+from services.text_embedder import TextEmbedder
 
+load_dotenv()
 
 class AgentFlags(Flag):
     """Flags for each agent type to allow multiple selections"""
@@ -31,12 +36,12 @@ class SupervisorState:
     """State for the supervisor agent workflow"""
     user_id: str
     current_message: str
+    resume_text: str
     conversation_history: List[Message]
     files: Optional[List[Dict[str, Any]]] = None
-    active_agents: Optional[AgentFlags] = AgentFlags.NONE
-    agent_results: Optional[Dict[str, Any]] = None
+    active_agents: AgentFlags = AgentFlags.NONE
+    agent_results: Dict[str, Any] = None
     final_response: Optional[str] = None
-    agent_params: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 
@@ -46,12 +51,12 @@ class SupervisorAgent:
     """
 
     def __init__(
-            self,
-            llm: GeminiLLM,
-            pc: Pinecone,
-            resume_matcher: ResumeMatchingAgent,
-            resume_enhancer: ResumeEnhancementAgent,
-            user_profile_agent: UserProfileAgent,
+        self,
+        llm: GeminiLLM,
+        pc: Pinecone,
+        resume_matcher: ResumeMatchingAgent,
+        resume_enhancer: ResumeEnhancementAgent,
+        user_profile_agent: UserProfileAgent,
     ):
         self.llm = llm
         self.pc = pc
@@ -61,24 +66,12 @@ class SupervisorAgent:
         self.workflow = self._create_workflow()
 
     async def process_message(
-            self,
-            user_id: str,
-            message: str,
-            conversation_history: List[Dict[str, Any]],
-            files: Optional[List[Dict[str, Any]]] = None
+        self,
+        user_id: str,
+        message: str,
+        conversation_history: List[Dict[str, Any]],
+        files: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
-        """
-        Process a new user message and determine appropriate handling
-
-        Args:
-            user_id: User identifier
-            message: Current user message
-            conversation_history: Previous conversation messages
-            files: Optional files attached to the message
-
-        Returns:
-            Dictionary with agent response and updated conversation
-        """
         # Convert conversation history to Message objects
         history = [
             Message(
@@ -90,286 +83,105 @@ class SupervisorAgent:
             for item in conversation_history
         ]
 
+        # Pre-fetch the user's resume text
+        resume_data = await get_user_resume(index=self.pc.Index("resumes"), user_id=user_id)
+        resume_text = resume_data.get("text", "")
+
         # Initialize workflow state
         initial_state = SupervisorState(
             user_id=user_id,
             current_message=message,
+            resume_text=resume_text,
             conversation_history=history,
             files=files,
             active_agents=AgentFlags.NONE,
             agent_results={},
             final_response=None,
-            agent_params={},
             error=None
         )
 
-        # Run the workflow
         try:
             result = await self.workflow.ainvoke(initial_state)
-
-            # Update conversation history
             new_history = result["conversation_history"]
-
-            # Convert Message objects back to dictionaries
             updated_history = [
-                {
-                    "role": msg.role,
-                    "content": msg.content,
-                    "timestamp": msg.timestamp,
-                    "metadata": msg.metadata
-                }
+                {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp, "metadata": msg.metadata}
                 for msg in new_history
             ]
 
+            print("Final Response:", result["final_response"])
             return {
                 "response": result["final_response"],
                 "conversation": updated_history,
-                "active_agents": result["active_agents"].name if result["active_agents"] else None,
-                "error": result["error"]
+                "active_agents": result["active_agents"].name if result.get("active_agents") else None,
+                "error": result.get("error")
             }
+
         except Exception as e:
-            return {
-                "response": None,
-                "conversation": conversation_history,
-                "active_agents": None,
-                "error": str(e)
-            }
+            return {"response": None, "conversation": conversation_history, "active_agents": None, "error": str(e)}
 
     async def _analyze_message(self, state: SupervisorState) -> Dict[str, Any]:
-        """
-        Analyze the message and determine which agents should handle it
-
-        Args:
-            state: Current supervisor state
-
-        Returns:
-            Updated state with selected agents and parameters
-        """
-        # Create a prompt for the LLM to analyze the message
-        conversation_context = "\n".join([
-            f"{msg.role.upper()}: {msg.content}"
-            for msg in state.conversation_history[-5:]  # Use last 5 messages for context
-        ])
-
-        routing_prompt = f"""
-        Analyze the conversation and the current message to determine which specialized agents should handle it.
-        You can select MULTIPLE agents if the request requires their combined expertise.
-
-        CONVERSATION HISTORY:
-        {conversation_context}
-
-        CURRENT MESSAGE:
-        {state.current_message}
-
-        FILE ATTACHMENTS: {'Yes' if state.files else 'No'}
-
-        Available agents:
-        1. RESUME_MATCHER - For matching resumes against job descriptions, analyzing fit, etc.
-        2. RESUME_ENHANCER - For improving existing resumes, suggesting optimizations, etc.
-        3. USER_PROFILE - For questions about the user's own resume, skills, projects, or personal information
-        4. CHAT - For general conversation, questions, and anything not specifically for the other agents
-
-        Critical: Select ALL agents needed to fully address the request. Many requests may require multiple agents working together.
-        For example:
-        - "Match my resume to this job and suggest improvements" would need BOTH resume_matcher AND resume_enhancer
-        - "How can I improve my resume's skills section based on my project experience?" would need BOTH user_profile AND resume_enhancer
-
-        Format your response as a JSON object with:
-        {{
-            "selected_agents": ["CHAT", "RESUME_MATCHER", "RESUME_ENHANCER", "USER_PROFILE"],  // Include ALL needed agents
-            "reasoning": "Detailed explanation justifying each selected agent's involvement",
-            "execution_order": ["AGENT1", "AGENT2", ...],  // Optimal order for execution
-            "parameters": {{
-                // Parameters for each agent
-                "RESUME_MATCHER": {{
-                    "job_description": "extracted job description if present"
-                }},
-                "RESUME_ENHANCER": {{
-                    "focus_areas": ["skills", "experience"] // Specific areas to enhance
-                }},
-                "USER_PROFILE": {{
-                    "question": "What are my skills?" // Specific question about user profile
-                }}
-            }}
-        }}
-        """
-
-        response = await self.llm.agenerate(
-            system_prompt="You are an intelligent routing system for a resume improvement platform. You analyze requests to determine which specialized agents should handle different parts of the request.",
-            user_message=routing_prompt,
-            response_format=ResponseFormat.JSON
-        )
-
-        if not response.success:
-            return {
-                "error": f"Failed to route message: {response.error}",
-                "active_agents": AgentFlags.CHAT  # Default to chat for fallback
-            }
-
-        try:
-            # Parse agent decision
-            decision = response.content
-            selected_agents = decision.get("selected_agents", ["CHAT"])
-            agent_params = decision.get("parameters", {})
-            execution_order = decision.get("execution_order", selected_agents)
-
-            # Convert string agent names to flags
-            active_agents = AgentFlags.NONE
-            if "CHAT" in selected_agents:
-                active_agents |= AgentFlags.CHAT
-            if "RESUME_MATCHER" in selected_agents:
-                active_agents |= AgentFlags.RESUME_MATCHER
-            if "RESUME_ENHANCER" in selected_agents:
-                active_agents |= AgentFlags.RESUME_ENHANCER
-            if "USER_PROFILE" in selected_agents:
-                active_agents |= AgentFlags.USER_PROFILE
-
-            return {
-                "active_agents": active_agents,
-                "agent_params": agent_params,
-                "execution_order": execution_order
-            }
-        except Exception as e:
-            return {
-                "error": f"Error parsing agent decision: {str(e)}",
-                "active_agents": AgentFlags.CHAT  # Default to chat for fallback
-            }
+        # Determine which agents to run based on the user message and resume context
+        active = AgentFlags.NONE
+        msg = state.current_message.lower()
+        if "match" in msg or "fit" in msg:
+            active |= AgentFlags.RESUME_MATCHER
+        if "improve" in msg or "enhance" in msg or "optimize" in msg:
+            active |= AgentFlags.RESUME_ENHANCER
+        if "who am i" in msg or "my skills" in msg or "profile" in msg:
+            active |= AgentFlags.USER_PROFILE
+        if active == AgentFlags.NONE:
+            active = AgentFlags.CHAT
+        return {"active_agents": active}
 
     async def _execute_agents(self, state: SupervisorState) -> Dict[str, Any]:
-        """
-        Execute all selected agents in parallel and collect their results
-
-        Args:
-            state: Current supervisor state with selected agents
-
-        Returns:
-            Updated state with agent results
-        """
         active_agents = state.active_agents
-        params = state.agent_params or {}
-        agent_results = {}
+        agent_results: Dict[str, Any] = {}
+        resume_text = state.resume_text
 
-        print(f"[SUPERVISOR] Executing agents: {active_agents}")
-        print(f"[SUPERVISOR] User message: {state.current_message[:50]}...")
-        print(f"[SUPERVISOR] Files: {len(state.files) if state.files else 0}")
+        async def run_user_profile():
+            return await self.user_profile_agent.process_user_query(
+                resume_text=resume_text,
+                prompt=state.current_message
+            )
 
-        try:
-            # Get user resume data - used by multiple agents
-            user_resume = None
-            resume_file = next((f for f in (state.files or []) if f.get("type") == "resume"), None)
+        async def run_matcher():
+            return await self.resume_matcher.analyze_resume_text(
+                resume_text=resume_text,
+                job_description=state.current_message
+            )
 
-            if not resume_file:
-                # Try to fetch the user's resume from Pinecone if needed by any agent
-                if (AgentFlags.RESUME_MATCHER in active_agents or
-                        AgentFlags.RESUME_ENHANCER in active_agents):
-                    print(f"[SUPERVISOR] Fetching resume from Pinecone for user: {state.user_id}")
-                    user_resume = await get_user_resume(index=self.pc.Index("resumes"), user_id=state.user_id)
+        async def run_enhancer():
+            return await self.resume_enhancer.enhance_resume(
+                resume_text=resume_text,
+                prompt=state.current_message
+            )
 
-            # Define coroutines for each agent
-            async def run_user_profile_agent():
-                try:
-                    # Extract the specific question from params or use the whole message
-                    profile_params = params.get("USER_PROFILE", {})
-                    question = profile_params.get("question", state.current_message)
+        async def run_chat():
+            resp = await handle_chat(
+                llm=self.llm,
+                message=state.current_message,
+                conversation_history=state.conversation_history,
+                files=state.files
+            )
+            return {"response": resp}
 
-                    # Call the user profile agent
-                    return await self.user_profile_agent.process_user_query(
-                        user_id=state.user_id,
-                        question=question
-                    )
-                except Exception as e:
-                    return {"error": str(e)}
+        # Build task list based on flags
+        tasks = []
+        if AgentFlags.USER_PROFILE in active_agents:
+            tasks.append(("user_profile", run_user_profile()))
+        if AgentFlags.RESUME_MATCHER in active_agents:
+            tasks.append(("resume_matcher", run_matcher()))
+        if AgentFlags.RESUME_ENHANCER in active_agents:
+            tasks.append(("resume_enhancer", run_enhancer()))
+        if AgentFlags.CHAT in active_agents or not tasks:
+            tasks.append(("chat", run_chat()))
 
-            async def run_resume_matcher_agent():
-                try:
-                    matcher_params = params.get("RESUME_MATCHER", {})
-                    job_description = matcher_params.get("job_description", "")
+        # Execute in parallel
+        results = await asyncio.gather(*(t for _, t in tasks), return_exceptions=True)
+        for (key, _), result in zip(tasks, results):
+            agent_results[key] = ("error" if isinstance(result, Exception) else result)
 
-                    # If no job description was extracted, try to get it from the message
-                    if not job_description:
-                        job_description = state.current_message
-
-                    if resume_file:
-                        # Use uploaded resume file
-                        return await self.resume_matcher.analyze_resume(
-                            resume_bytes=resume_file["bytes"],
-                            job_description=job_description
-                        )
-                    elif user_resume and user_resume.get("text"):
-                        # Use resume text from Pinecone
-                        return await self.resume_matcher.analyze_resume_text(
-                            resume_text=user_resume["text"],
-                            job_description=job_description
-                        )
-                    else:
-                        return {"error": "No resume found for matching"}
-                except Exception as e:
-                    return {"error": str(e)}
-
-            async def run_resume_enhancer_agent():
-                try:
-                    enhancer_params = params.get("RESUME_ENHANCER", {})
-                    focus_areas = enhancer_params.get("focus_areas", [])
-
-                    # Call resume enhancer agent
-                    return await self.resume_enhancer.enhance_resume(
-                        user_id=state.user_id
-                    )
-                except Exception as e:
-                    return {"error": str(e)}
-
-            async def run_chat_agent():
-                try:
-                    # Handle general chat
-                    chat_response = await handle_chat(
-                        llm=self.llm,
-                        message=state.current_message,
-                        conversation_history=state.conversation_history,
-                        files=state.files
-                    )
-                    return {"response": chat_response}
-                except Exception as e:
-                    return {"error": str(e)}
-
-            # Prepare tasks to run in parallel based on active agents
-            tasks = []
-            task_names = []
-
-            if AgentFlags.USER_PROFILE in active_agents:
-                tasks.append(run_user_profile_agent())
-                task_names.append("user_profile")
-
-            if AgentFlags.RESUME_MATCHER in active_agents:
-                tasks.append(run_resume_matcher_agent())
-                task_names.append("resume_matcher")
-
-            if AgentFlags.RESUME_ENHANCER in active_agents:
-                tasks.append(run_resume_enhancer_agent())
-                task_names.append("resume_enhancer")
-
-            if AgentFlags.CHAT in active_agents or not tasks:  # Run chat agent if selected or as fallback
-                tasks.append(run_chat_agent())
-                task_names.append("chat")
-
-            # Execute all tasks in parallel
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Process results
-                for i, result in enumerate(results):
-                    if isinstance(result, Exception):
-                        agent_results[task_names[i]] = {"error": str(result)}
-                    else:
-                        agent_results[task_names[i]] = result
-
-            return {"agent_results": agent_results}
-
-        except Exception as e:
-            print(f"[SUPERVISOR] Error executing agents: {str(e)}")
-            return {
-                "error": f"Error executing agents: {str(e)}",
-                "agent_results": {"error": str(e)}
-            }
+        return {"agent_results": agent_results}
 
     async def _synthesize_response(self, state: SupervisorState) -> Dict[str, Any]:
         """
@@ -492,84 +304,50 @@ class SupervisorAgent:
         return {"final_response": final_response}
 
     async def _update_conversation(self, state: SupervisorState) -> Dict[str, Any]:
-        """
-        Update conversation history with the new message and response
-
-        Args:
-            state: Current supervisor state
-
-        Returns:
-            Updated state with new conversation history
-        """
-        # Create timestamp for new messages
-        timestamp = datetime.now().isoformat()
-
-        # Add the user message to history if not already there
-        if not state.conversation_history or state.conversation_history[-1].role != "user" or \
-                state.conversation_history[-1].content != state.current_message:
-            state.conversation_history.append(
-                Message(
-                    role="user",
-                    content=state.current_message,
-                    timestamp=timestamp
-                )
-            )
-
-        # Add the assistant response to history
-        if state.final_response:
-            # Create metadata about which agents were used
-            agent_metadata = {}
-            if state.active_agents:
-                active_agent_names = []
-                if AgentFlags.CHAT in state.active_agents:
-                    active_agent_names.append("chat")
-                if AgentFlags.RESUME_MATCHER in state.active_agents:
-                    active_agent_names.append("resume_matcher")
-                if AgentFlags.RESUME_ENHANCER in state.active_agents:
-                    active_agent_names.append("resume_enhancer")
-                if AgentFlags.USER_PROFILE in state.active_agents:
-                    active_agent_names.append("user_profile")
-
-                agent_metadata["agents"] = active_agent_names
-
-            state.conversation_history.append(
-                Message(
-                    role="assistant",
-                    content=state.final_response,
-                    timestamp=timestamp,
-                    metadata=agent_metadata
-                )
-            )
-
-        return {
-            "conversation_history": state.conversation_history
-        }
+        ts = datetime.now().isoformat()
+        # Append user and assistant messages
+        state.conversation_history.append(Message(role="user", content=state.current_message, timestamp=ts))
+        state.conversation_history.append(Message(role="assistant", content=state.final_response, timestamp=ts, metadata={"agents": [f.name.lower() for f in AgentFlags if f in state.active_agents and f != AgentFlags.NONE]}))
+        return {"conversation_history": state.conversation_history}
 
     def _create_workflow(self) -> CompiledStateGraph:
-        """
-        Create and compile the supervisor workflow graph
-
-        Returns:
-            Compiled workflow graph
-        """
         builder = StateGraph(SupervisorState)
-
-        # Add workflow nodes
         builder.add_node("analyze_message", self._analyze_message)
         builder.add_node("execute_agents", self._execute_agents)
         builder.add_node("synthesize_response", self._synthesize_response)
         builder.add_node("update_conversation", self._update_conversation)
-
-        # Define workflow edges
         builder.add_edge(START, "analyze_message")
         builder.add_edge("analyze_message", "execute_agents")
         builder.add_edge("execute_agents", "synthesize_response")
         builder.add_edge("synthesize_response", "update_conversation")
         builder.add_edge("update_conversation", END)
+        return builder.compile()
 
-        # Compile the workflow
-        workflow = builder.compile()
-        print("Supervisor Agent Workflow:")
-        print(workflow.get_graph().draw_ascii())
 
-        return workflow
+if __name__ == "__main__":
+    user_id = "oPmOJhSE0VQid56yYyg19hdH5DV2"
+
+    # Instantiate GeminiLLM
+    gemini_llm = GeminiLLM()
+
+    # Create the ResumeEnhancer instance
+    supervisor = SupervisorAgent(
+        llm=gemini_llm,
+        pc=Pinecone(api_key=os.environ["PINECONE_API_KEY"]),
+        resume_matcher=ResumeMatchingAgent(resume_parser=ResumeParser(), text_embedder=TextEmbedder(), llm=gemini_llm),
+        resume_enhancer=ResumeEnhancementAgent(gemini_llm),
+        user_profile_agent=UserProfileAgent(gemini_llm)
+    )
+
+    # Example usage
+    conversation_history = [
+        {
+            "role": "user",
+            "content": "What are my skills?",
+            "timestamp": datetime.now().isoformat(),
+            "metadata": {}
+        }
+    ]
+    files = None  # Replace with actual file data if needed
+    message = "What are my skills?"
+    response = asyncio.run(supervisor.process_message(user_id, message, conversation_history, files))
