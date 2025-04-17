@@ -24,10 +24,10 @@ class EnhancementState(MessagesState):
     resume_text: str
     prompt: str
 
-class ResumeEnhancer:
+class ResumeEnhancementAgent:
     def __init__(self, llm: GeminiLLM):
         """
-        Initializes the ResumeEnhancer.
+        Initializes the ResumeEnhancementAgent.
 
         Args:
             llm: An instance of GeminiLLM.
@@ -328,7 +328,7 @@ class ResumeEnhancer:
         invocation = self.llm_with_tools.invoke(messages)
         return {"messages": [invocation]}
 
-    def enhance_resume(self, resume_text: str, prompt: str) -> Dict[str, Any]:
+    async def enhance_resume(self, resume_text: str, prompt: str) -> Dict[str, Any]:
         """
         Runs the ReAct agent graph using the provided resume text and prints the result.
 
@@ -364,7 +364,7 @@ if __name__ == "__main__":
     gemini_llm = GeminiLLM()
 
     # Create the ResumeEnhancer instance
-    enhancer = ResumeEnhancer(gemini_llm)
+    enhancer = ResumeEnhancementAgent(gemini_llm)
 
     # Run the agent graph to analyze the resume with optional job description
-    enhancer.enhance_resume(resume_data["text"], "Analyze this resume for ATS compatibility and content quality.")
+    asyncio.run(enhancer.enhance_resume(resume_data["text"], "Analyze this resume for ATS compatibility and content quality."))
