@@ -26,11 +26,12 @@ class FirestoreDB:
             posts.append(post_data)
         return posts
 
-    def create_post(self, author: str, content: str):
+    def create_post(self, author: str, author_uid: str, content: str):
         """Create a new post"""
         new_post_ref = self.collection("posts").document()
         new_post_data = {
             "author": author,
+            "author_uid": author_uid,
             "content": content,
             "created_at": datetime.now().isoformat(),
             "likes": 0,
@@ -83,14 +84,14 @@ class FirestoreDB:
         like_ref = post_ref.collection("likes").document(user_id)
         return like_ref.get().exists
 
-    def add_comment(self, post_id: str, author: str, text: str):
+    def add_comment(self, post_id: str, author: str, author_id: str, text: str):
         """Add a comment to a post"""
-
         post_ref = self.collection("posts").document(post_id)
         comment_ref = post_ref.collection("comments").document()
         sanitized_text = bleach.clean(text, strip=True)
         comment_data = {
             "author": author,
+            "author_uid": author_id,
             "text": sanitized_text,
             "created_at": datetime.now().isoformat()
         }

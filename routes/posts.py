@@ -37,11 +37,13 @@ async def create_post(
 ) -> Dict[str, Any]:
     """Create a new post"""
     author = current_user.email
-    post_id = db.create_post(author, post_data.content)
+    author_uid = current_user.user_id
+    post_id = db.create_post(author, author_uid, post_data.content)
 
     return {
         "id": post_id,
         "author": author,
+        "author_uid": current_user.user_id,
         "content": post_data.content,
         "created_at": datetime.now().isoformat(),
         "likes": 0,
@@ -86,12 +88,14 @@ async def add_comment(
 ) -> Dict[str, Any]:
     """Add a comment to a post"""
     author = current_user.email
-    comment_id = db.add_comment(post_id, author, comment.text)
+    author_id = current_user.user_id
+    comment_id = db.add_comment(post_id, author, author_id, comment.text)
 
     return {
         "id": comment_id,
         "post_id": post_id,
         "author": author,
+        "author_uid": current_user.user_id,
         "text": comment.text,
         "created_at": datetime.now().isoformat()
     }
