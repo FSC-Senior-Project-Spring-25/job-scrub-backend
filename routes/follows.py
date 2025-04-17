@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, HTTPException, Depends
 from google.cloud import firestore
 from dependencies import Firestore
