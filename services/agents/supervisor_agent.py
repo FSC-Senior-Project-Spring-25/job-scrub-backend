@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -16,7 +17,7 @@ from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.chat_handler import handle_chat
 from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
-from services.gemini import GeminiLLM
+from services.gemini import GeminiLLM, ResponseFormat
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
@@ -86,7 +87,7 @@ class SupervisorAgent:
         # Pre-fetch the user's resume text
         resume_data = await get_user_resume(index=self.pc.Index("resumes"), user_id=user_id)
         resume_text = resume_data.get("text", "")
-
+        print("Resume Data:", resume_data)
         # Initialize workflow state
         initial_state = SupervisorState(
             user_id=user_id,
@@ -99,7 +100,7 @@ class SupervisorAgent:
             final_response=None,
             error=None
         )
-
+        print(f"Processing message: {message} for user: {user_id}")
         try:
             result = await self.workflow.ainvoke(initial_state)
             new_history = result["conversation_history"]
@@ -120,17 +121,51 @@ class SupervisorAgent:
             return {"response": None, "conversation": conversation_history, "active_agents": None, "error": str(e)}
 
     async def _analyze_message(self, state: SupervisorState) -> Dict[str, Any]:
-        # Determine which agents to run based on the user message and resume context
+        """Determine which agents to run based on the user message using LLM analysis"""
+
+        prompt = f"""
+        Analyze the following user message and determine which specialized agent(s) should handle it.
+
+        User message: "{state.current_message}"
+
+        Available agents:
+        - RESUME_MATCHER: For questions about job fit, matching resumes to jobs, or compatibility with positions
+        - RESUME_ENHANCER: For requests to improve, enhance, optimize, or get feedback on resumes
+        - USER_PROFILE: For questions about the user's skills, background, profile, or identity
+        - CHAT: For general conversation or questions not covered by specialized agents
+
+        Multiple agents can be activated simultaneously. Select all applicable agents.
+        Return a JSON object with the following format: {{"agents": ["AGENT_NAME1", "AGENT_NAME2", ...]}}
+        """
+        response = await self.llm.agenerate(
+            system_prompt="You are a routing assistant that analyzes user messages and determines which specialized agents should process them.",
+            user_message=prompt,
+            response_format=ResponseFormat.JSON
+        )
+
         active = AgentFlags.NONE
-        msg = state.current_message.lower()
-        if "match" in msg or "fit" in msg:
-            active |= AgentFlags.RESUME_MATCHER
-        if "improve" in msg or "enhance" in msg or "optimize" in msg:
-            active |= AgentFlags.RESUME_ENHANCER
-        if "who am i" in msg or "my skills" in msg or "profile" in msg:
-            active |= AgentFlags.USER_PROFILE
+
+        if response.success and isinstance(response.content, dict) and "agents" in response.content:
+            agent_names = response.content["agents"]
+
+            # Map string agent names to AgentFlags
+            mapping = {
+                "RESUME_MATCHER": AgentFlags.RESUME_MATCHER,
+                "RESUME_ENHANCER": AgentFlags.RESUME_ENHANCER,
+                "USER_PROFILE": AgentFlags.USER_PROFILE,
+                "CHAT": AgentFlags.CHAT
+            }
+
+            # Combine all applicable flags
+            for agent_name in agent_names:
+                if agent_name in mapping:
+                    active |= mapping[agent_name]
+
+        # Fallback to CHAT if no agents were selected or if the LLM response failed
         if active == AgentFlags.NONE:
             active = AgentFlags.CHAT
+
+        print("Active agents determined:", active)
         return {"active_agents": active}
 
     async def _execute_agents(self, state: SupervisorState) -> Dict[str, Any]:
@@ -165,14 +200,17 @@ class SupervisorAgent:
             )
             return {"response": resp}
 
-        # Build task list based on flags
-        tasks = []
-        if AgentFlags.USER_PROFILE in active_agents:
-            tasks.append(("user_profile", run_user_profile()))
-        if AgentFlags.RESUME_MATCHER in active_agents:
-            tasks.append(("resume_matcher", run_matcher()))
-        if AgentFlags.RESUME_ENHANCER in active_agents:
-            tasks.append(("resume_enhancer", run_enhancer()))
+        # Map agent flags to their corresponding functions
+        agent_functions = {
+            AgentFlags.USER_PROFILE: ("user_profile", run_user_profile()),
+            AgentFlags.RESUME_MATCHER: ("resume_matcher", run_matcher()),
+            AgentFlags.RESUME_ENHANCER: ("resume_enhancer", run_enhancer()),
+        }
+
+        # Build task list using comprehension
+        tasks = [agent_functions[flag] for flag in agent_functions if flag in active_agents]
+
+        # Add chat task if no other tasks or if explicitly requested
         if AgentFlags.CHAT in active_agents or not tasks:
             tasks.append(("chat", run_chat()))
 
@@ -214,68 +252,11 @@ class SupervisorAgent:
 
         USER QUERY:
         {user_query}
+        
+        RESULTS:
+        {json.dumps(agent_results, indent=2)}
 
         Focus on providing a response that actually answers what the user is asking. Only include information that is relevant to their specific question.
-        """
-
-        # Add relevant results from each agent to the prompt, but keeping focus on the user's query
-        if "user_profile" in agent_results:
-            profile_result = agent_results["user_profile"]
-            if "error" not in profile_result:
-                synthesis_prompt += f"\nUSER PROFILE INFORMATION:\n{profile_result.get('answer', '')}\n"
-
-        if "resume_matcher" in agent_results:
-            matcher_result = agent_results["resume_matcher"]
-            if "error" not in matcher_result:
-                synthesis_prompt += "\nRESUME MATCHER RESULTS:\n"
-                # Include only the most relevant parts for job matching
-                synthesis_prompt += f"- Match Score: {matcher_result.get('match_score')}\n"
-                if "missing_keywords" in matcher_result and matcher_result["missing_keywords"]:
-                    synthesis_prompt += f"- Missing Keywords: {', '.join(matcher_result.get('missing_keywords', []))}\n"
-
-        if "resume_enhancer" in agent_results:
-            enhancer_result = agent_results["resume_enhancer"]
-            if "error" not in enhancer_result:
-                # Check what areas the user was asking about
-                query_context = enhancer_result.get("query_context", "")
-                focus_areas = enhancer_result.get("focus_areas", [])
-
-                synthesis_prompt += "\nRESUME ENHANCER RESULTS:\n"
-
-                # Only include information about areas the user asked about
-                if "ats" in query_context.lower() and "ats_issues" in enhancer_result:
-                    synthesis_prompt += "ATS ISSUES:\n"
-                    for issue in enhancer_result["ats_issues"]:
-                        synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
-                        synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
-
-                if any(term in query_context.lower() for term in
-                       ["content", "wording", "language"]) and "content_issues" in enhancer_result:
-                    synthesis_prompt += "CONTENT ISSUES:\n"
-                    for issue in enhancer_result["content_issues"]:
-                        synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
-                        synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
-
-                if any(term in query_context.lower() for term in
-                       ["format", "layout", "structure"]) and "formatting_issues" in enhancer_result:
-                    synthesis_prompt += "FORMATTING ISSUES:\n"
-                    for issue in enhancer_result["formatting_issues"]:
-                        synthesis_prompt += f"- {issue.get('impact', 'Medium').upper()}: {issue.get('issue')}\n"
-                        synthesis_prompt += f"  Recommendation: {issue.get('recommendation')}\n"
-
-                # Always include enhancement suggestions but filter them by relevance
-                if "enhancement_suggestions" in enhancer_result:
-                    synthesis_prompt += "ENHANCEMENT SUGGESTIONS:\n"
-                    for suggestion in enhancer_result["enhancement_suggestions"]:
-                        # Only include suggestions relevant to the focus areas
-                        if not focus_areas or suggestion.get("section", "").lower() in [area.lower() for area in
-                                                                                        focus_areas]:
-                            synthesis_prompt += f"- {suggestion.get('priority', 'Medium').upper()}: {suggestion.get('description')} ({suggestion.get('section')})\n"
-                            if "examples" in suggestion:
-                                synthesis_prompt += f"  Examples: {', '.join(suggestion.get('examples', []))}\n"
-
-        # Add instructions for synthesis focused on relevance to the user's query
-        synthesis_prompt += """
         Guidelines for response formatting:
         1. Use proper markdown formatting with headers, lists, and emphasis
         2. Start with a direct answer to the user's specific question
@@ -288,7 +269,7 @@ class SupervisorAgent:
         Important: The response should be well-structured, focused only on answering what the user asked,
         and appear as if it came from a single intelligent assistant.
         """
-
+        print("Synthesis prompt:", synthesis_prompt)
         # Generate synthesized response
         response = await self.llm.agenerate(
             system_prompt="You are an expert resume consultant that provides focused, relevant answers to user questions.",
@@ -349,5 +330,5 @@ if __name__ == "__main__":
         }
     ]
     files = None  # Replace with actual file data if needed
-    message = "What are my skills?"
+    message = "Is my resume ATS compliant?"
     response = asyncio.run(supervisor.process_message(user_id, message, conversation_history, files))
