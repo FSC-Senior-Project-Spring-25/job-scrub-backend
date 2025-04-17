@@ -133,7 +133,6 @@ class ResumeEnhancementAgent:
                 "Format your response as a JSON object with the following structure:\n"
                 "{\n"
                 '  "ats_analysis": {\n'
-                '    "score": number, // Overall ATS compatibility score (0-100)\n'
                 '    "format_compatibility": {\n'
                 '      "is_parseable": boolean,\n'
                 '      "issues": [\n'
@@ -185,25 +184,20 @@ class ResumeEnhancementAgent:
                 "Format your response as a JSON object with the following structure:\n"
                 "{\n"
                 '  "content_quality": {\n'
-                '    "overall_score": number, // Score from 0-100\n'
                 '    "impact_statements": {\n'
-                '      "score": number,\n'
                 '      "strengths": ["string"],\n'
                 '      "weaknesses": ["string"],\n'
                 '      "examples_found": ["string"]\n'
                 '    },\n'
                 '    "clarity": {\n'
-                '      "score": number,\n'
                 '      "issues": ["string"],\n'
                 '      "improvements": ["string"]\n'
                 '    },\n'
                 '    "language": {\n'
-                '      "score": number,\n'
                 '      "professional_terms": ["string"],\n'
                 '      "weak_phrases": ["string"]\n'
                 '    },\n'
                 '    "relevance": {\n'
-                '      "score": number,\n'
                 '      "irrelevant_content": ["string"]\n'
                 '    },\n'
                 '    "recommendations": ["string"]\n'
