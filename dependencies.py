@@ -2,11 +2,15 @@ from typing import Annotated
 
 from aiohttp import ClientSession
 from fastapi import Request, Depends, HTTPException
-from firebase_admin import firestore
 from firebase_admin.auth import verify_id_token
+from pinecone import Pinecone
 
 from context import request_context
+from models.user import User
+from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
+from services.agents.supervisor_agent import SupervisorAgent
+from services.agents.user_profile_agent import UserProfileAgent
 from services.firestore import FirestoreDB
 from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
@@ -26,7 +30,7 @@ async def get_session(request: Request) -> ClientSession:
     return request.app.state.session
 
 
-async def get_current_user(request: Request) -> dict[str, str]:
+async def get_current_user(request: Request) -> User:
     """
     Verify Firebase ID token from Authorization header and return user info
     """
@@ -41,10 +45,11 @@ async def get_current_user(request: Request) -> dict[str, str]:
     try:
         # Verify the Firebase ID token
         decoded_token = verify_id_token(token)
-        return {
-            "user_id": decoded_token["uid"],
-            "email": decoded_token.get("email", "")
-        }
+        print(f"Decoded token: {decoded_token}")
+        return User(
+            user_id=decoded_token["uid"],
+            email=decoded_token["email"],
+        )
     except Exception as e:
         print(f"Invalid authentication token: {str(e)}")
         raise HTTPException(
@@ -61,6 +66,11 @@ async def get_s3_service(request: Request) -> S3Service:
 async def get_firestore(request: Request):
     """ Get Firestore DB from app state """
     return request.app.state.firestore
+
+
+async def get_pinecone(request: Request) -> Pinecone:
+    """Get Pinecone client from app state"""
+    return request.app.state.pinecone
 
 
 async def get_embedder(request: Request) -> TextEmbedder:
@@ -93,12 +103,32 @@ async def get_resume_agent(request: Request) -> ResumeMatchingAgent:
     return request.app.state.resume_agent
 
 
+async def get_resume_enhancer(request: Request) -> ResumeEnhancementAgent:
+    """Get embedder from app state"""
+    return request.app.state.resume_enhancer
+
+
+async def get_user_profile_agent(request: Request) -> UserProfileAgent:
+    """Get user profile agent from app state"""
+    return request.app.state.user_profile_agent
+
+
+async def get_supervisor_agent(request: Request) -> SupervisorAgent:
+    """Get embedder from app state"""
+    return request.app.state.supervisor_agent
+
+
 # Type annotations for dependency injection (used in non-FastAPI routes with @injectable)
+CurrentUser = Annotated[User, Depends(get_current_user)]
 S3 = Annotated[S3Service, Depends(get_s3_service)]
 Firestore = Annotated[FirestoreDB, Depends(get_firestore)]
+PineconeClient = Annotated[Pinecone, Depends(get_pinecone)]
 Embedder = Annotated[TextEmbedder, Depends(get_embedder)]
-JobPostingService = Annotated[TextEmbedder, Depends(get_job_posting_service)]
-JobVerificationService = Annotated[TextEmbedder, Depends(get_job_verification_service)]
-GeminiLLM = Annotated[GeminiLLM, Depends(get_gemini_llm)]
-ResumeParser = Annotated[ResumeParser, Depends(get_resume_parser)]
+JobPoster = Annotated[JobsPostingService, Depends(get_job_posting_service)]
+JobVerifier = Annotated[JobsVerificationService, Depends(get_job_verification_service)]
+LLM = Annotated[GeminiLLM, Depends(get_gemini_llm)]
+Parser = Annotated[ResumeParser, Depends(get_resume_parser)]
 MatchingAgent = Annotated[ResumeMatchingAgent, Depends(get_resume_agent)]
+EnhancementAgent = Annotated[ResumeEnhancementAgent, Depends(get_resume_enhancer)]
+ProfileAgent = Annotated[UserProfileAgent, Depends(get_user_profile_agent)]
+SupervisorAgent = Annotated[SupervisorAgent, Depends(get_supervisor_agent)]

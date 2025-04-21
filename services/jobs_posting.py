@@ -1,12 +1,13 @@
 import uuid
-
 import aiohttp
+import asyncio
 from fastapi import HTTPException
 from pinecone import Pinecone
 
 from models.job_report import JobReport
+from services.agents.tools.extract_keywords import extract_keywords
+from services.gemini import GeminiLLM
 from services.text_embedder import TextEmbedder
-from utils.coordinates import get_coordinates
 
 
 class JobsPostingService:
@@ -14,12 +15,13 @@ class JobsPostingService:
             self,
             embedder: TextEmbedder,
             index: Pinecone.Index,
+            llm: GeminiLLM,
             session: aiohttp.ClientSession,
     ):
         self.embedder = embedder
         self.index = index
+        self.llm = llm
         self.session = session
-
 
     async def create_job_posting(self, job: JobReport) -> dict:
         """
@@ -32,24 +34,29 @@ class JobsPostingService:
         # Combine title and description for a richer embedding
         combined_text = f"{job.title} {job.description}"
 
-        # Get embedding
-        embedding = self.embedder.get_embeddings([combined_text])[0]
+        # Run tasks concurrently
+        embedding_task = self.embedder.get_embeddings([combined_text])
+        keywords_task = extract_keywords(combined_text, self.llm)
+
+        embedding, keywords = await asyncio.gather(embedding_task, keywords_task)
 
         # Prepare metadata
-        metadata = job.model_dump(exclude_none=True, by_alias=True)
-
-        lat, lon = await get_coordinates(session=self.session, location=job.location)
-        metadata["lat"] = lat
-        metadata["lon"] = lon
+        metadata = job.model_dump(exclude_none=True, by_alias=True, exclude={"location"})
+        metadata["lat"] = job.location.lat
+        metadata["lon"] = job.location.lon
+        metadata["address"] = job.location.address
+        metadata["keywords"] = keywords
+        # Convert enum to string
+        metadata["jobType"] = job.job_type.value
+        metadata["locationType"] = job.location_type.value
 
         # All jobs are unverified by default
         metadata["verified"] = False
         return {
             "id": f"job_{uuid.uuid4()}",  # Generate unique ID using UUID
-            "values": embedding.tolist(),
+            "values": embedding[0].tolist(),
             "metadata": metadata,
         }
-
 
     async def post_job(self, job: JobReport) -> str:
         """

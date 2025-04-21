@@ -26,11 +26,12 @@ class FirestoreDB:
             posts.append(post_data)
         return posts
 
-    def create_post(self, author: str, content: str):
+    def create_post(self, author: str, author_uid: str, content: str):
         """Create a new post"""
         new_post_ref = self.collection("posts").document()
         new_post_data = {
             "author": author,
+            "author_uid": author_uid,
             "content": content,
             "created_at": datetime.now().isoformat(),
             "likes": 0,
@@ -83,14 +84,14 @@ class FirestoreDB:
         like_ref = post_ref.collection("likes").document(user_id)
         return like_ref.get().exists
 
-    def add_comment(self, post_id: str, author: str, text: str):
+    def add_comment(self, post_id: str, author: str, author_id: str, text: str):
         """Add a comment to a post"""
-
         post_ref = self.collection("posts").document(post_id)
         comment_ref = post_ref.collection("comments").document()
         sanitized_text = bleach.clean(text, strip=True)
         comment_data = {
             "author": author,
+            "author_uid": author_id,
             "text": sanitized_text,
             "created_at": datetime.now().isoformat()
         }
@@ -113,3 +114,22 @@ class FirestoreDB:
             c_data["id"] = doc.id
             comments.append(c_data)
         return comments
+    def search_users(self, q: str):
+        """
+        Fetch all users and return those whose email or username
+        contains the query string (case-insensitive).
+        """
+        q_lower = q.strip().lower()
+        users_ref = self.collection("users").stream()
+
+        results = []
+        for doc in users_ref:
+            data = doc.to_dict()
+            email = data.get("email", "") or ""
+            username = data.get("username", "") or ""
+            # case-insensitive substring match
+            if q_lower in email.lower() or q_lower in username.lower():
+                # include the full profile
+                results.append({"id": doc.id, **data})
+
+        return results

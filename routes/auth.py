@@ -1,3 +1,4 @@
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request, Response, HTTPException
 from firebase_admin import auth
@@ -11,7 +12,10 @@ router = APIRouter()
 async def login(request: TokenRequest, response: Response):
     try:
         # Verify the ID token
-        decoded_token = auth.verify_id_token(request.id_token)
+        decoded_token = auth.verify_id_token(
+            id_token=request.id_token,
+            clock_skew_seconds=10
+        )
 
         # Create a session cookie
         expires_in = 5 * 24 * 60 * 60  # 5 days in seconds
@@ -19,6 +23,13 @@ async def login(request: TokenRequest, response: Response):
             request.id_token,
             expires_in=expires_in
         )
+
+        origin = response.headers.get("origin", "")
+        domain = None
+
+        # If in production, extract domain from origin
+        if origin and "localhost" not in origin:
+            domain = urlparse(origin).netloc
 
         # Set the cookie in the response
         response.headers["Access-Control-Allow-Credentials"] = "true"
@@ -30,7 +41,7 @@ async def login(request: TokenRequest, response: Response):
             max_age=expires_in,
             path="/",
             samesite="lax",
-            domain=None
+            domain=domain
         )
 
         return {"success": True, "user_id": decoded_token["uid"]}
@@ -62,8 +73,9 @@ async def verify_session(request: Request):
 
         # Verify the session cookie
         decoded_claims = auth.verify_session_cookie(
-            session_cookie,
-            check_revoked=True
+            session_cookie=session_cookie,
+            check_revoked=True,
+            clock_skew_seconds=10
         )
 
         # Session is valid

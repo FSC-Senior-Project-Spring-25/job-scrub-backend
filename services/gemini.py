@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any, List, AsyncGenerator
 import json
 from dataclasses import dataclass
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -26,9 +26,8 @@ class GeminiLLM:
 
     def __init__(
             self,
-            model: str = "gemini-2.0-flash",
+            model: str = "gemini-2.0-flash-lite",
             temperature: float = 0.0,
-            max_tokens: Optional[int] = 512,
             max_retries: int = 2
     ):
         """Initialize Gemini LLM interface
@@ -36,13 +35,11 @@ class GeminiLLM:
         Args:
             model: The Gemini model to use
             temperature: Controls randomness in output (0.0 = deterministic)
-            max_tokens: Maximum number of tokens in response
             max_retries: Number of retry attempts for failed calls
         """
-        self.llm = ChatGoogleGenerativeAI(
+        self.chat = ChatGoogleGenerativeAI(
             model=model,
             temperature=temperature,
-            max_tokens=max_tokens,
             max_retries=max_retries
         )
 
@@ -115,7 +112,7 @@ class GeminiLLM:
                 error=f"Failed to parse JSON response: {str(e)}"
             )
 
-    async def generate(
+    async def agenerate(
             self,
             system_prompt: str,
             user_message: str,
@@ -133,7 +130,7 @@ class GeminiLLM:
         """
         try:
             messages = self._create_messages(system_prompt, user_message, response_format)
-            response = await self.llm.ainvoke(messages)
+            response = await self.chat.ainvoke(messages)
             return self._parse_response(response.content, response_format)
         except Exception as e:
             return GeminiResponse(
@@ -142,3 +139,71 @@ class GeminiLLM:
                 success=False,
                 error=f"Generation failed: {str(e)}"
             )
+
+    def generate(
+            self,
+            system_prompt: str,
+            user_message: str,
+            response_format: ResponseFormat = ResponseFormat.RAW
+    ) -> GeminiResponse:
+        """Generate a response from Gemini
+
+        Args:
+            system_prompt: System instruction prompt
+            user_message: User's input message
+            response_format: Desired format for the response
+
+        Returns:
+            GeminiResponse object containing the response
+        """
+        try:
+            messages = self._create_messages(system_prompt, user_message, response_format)
+            response = self.chat.invoke(messages)
+            return self._parse_response(response.content, response_format)
+        except Exception as e:
+            return GeminiResponse(
+                content="" if response_format == ResponseFormat.RAW else {},
+                raw_response="",
+                success=False,
+                error=f"Generation failed: {str(e)}"
+            )
+
+    async def generate_stream(
+            self,
+            system_prompt: str,
+            user_message: str,
+            response_format: ResponseFormat = ResponseFormat.RAW
+    ) -> AsyncGenerator[str, None]:
+        """Generate a streaming response from Gemini
+
+        Args:
+            system_prompt: System instruction prompt
+            user_message: User's input message
+            response_format: Desired format for the response
+
+        Yields:
+            Chunks of the generated response
+        """
+        try:
+            messages = self._create_messages(system_prompt, user_message, response_format)
+            stream = self.chat.astream(messages)  # Don't await here
+
+            buffer = ""
+            async for chunk in stream:  # Stream directly
+                if chunk.content:
+                    if response_format == ResponseFormat.JSON:
+                        # Buffer JSON content
+                        buffer += chunk.content
+                    else:
+                        yield chunk.content
+
+            # If JSON format, yield the complete buffered content
+            if response_format == ResponseFormat.JSON and buffer:
+                try:
+                    json_content = json.loads(buffer)
+                    yield json.dumps(json_content)
+                except json.JSONDecodeError:
+                    yield buffer
+
+        except Exception as e:
+            yield f"Error: {str(e)}"

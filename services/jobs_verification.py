@@ -71,15 +71,16 @@ class JobsVerificationService:
             final_metadata = {"verified": verified}
 
             # Convert JobReport to dict and update final metadata
-            amended_metadata = job_report.model_dump(exclude_none=True, by_alias=True)
-            final_metadata.update(amended_metadata)
+            amended_metadata = job_report.model_dump(exclude_none=True, by_alias=True, exclude={"location"})
+            amended_metadata["lat"] = job_report.location.lat
+            amended_metadata["lon"] = job_report.location.lon
+            amended_metadata["address"] = job_report.location.address
 
-            # Check if location changed (requiring coordinates update)
-            location_changed = amended_metadata.get('location') != current_metadata.get('location')
-            if location_changed:
-                lat, lon = await get_coordinates(session=self.session, location=job_report.location)
-                final_metadata["lat"] = lat
-                final_metadata["lon"] = lon
+            # Convert enum to string
+            amended_metadata["jobType"] = job_report.job_type.value
+            amended_metadata["locationType"] = job_report.location_type.value
+
+            final_metadata.update(amended_metadata)
 
             # Check if title or description changed (requiring vector update)
             title_changed = amended_metadata.get('title') != current_metadata.get('title')
@@ -88,14 +89,14 @@ class JobsVerificationService:
             if title_changed or desc_changed:
                 # Generate new embedding using the updated content
                 combined_text = f"{final_metadata['title']} {final_metadata['description']}"
-                new_embedding = self.embedder.get_embeddings([combined_text])[0]
+                new_embedding = await self.embedder.get_embeddings([combined_text])
 
                 # Update both vector and metadata
                 self.index.upsert(
                     namespace="jobs",
                     vectors=[{
                         "id": job_id,
-                        "values": new_embedding.tolist(),
+                        "values": new_embedding[0].tolist(),
                         "metadata": final_metadata
                     }]
                 )
@@ -108,7 +109,8 @@ class JobsVerificationService:
                 set_metadata=final_metadata
             )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            print(str(e))
+            raise HTTPException(status_code=500, detail="Failed to verify job: " + str(e))
 
     async def delete_job(self, job_id: str) -> None:
         """
