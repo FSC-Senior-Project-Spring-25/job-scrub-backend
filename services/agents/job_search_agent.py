@@ -107,6 +107,8 @@ class JobSearchAgent:
                     entry["locationAddress"] = loc.get("address", "")
                     if loc.get("coordinates"):
                         entry["locationCoordinates"] = loc["coordinates"]
+
+                entry.pop("description")
                 jobs.append(entry)
             print("Jobs:", jobs)
             return {"jobs": jobs}
@@ -345,7 +347,7 @@ class JobSearchAgent:
                     try:
                         pd = datetime.fromisoformat(jd) if isinstance(jd, str) else datetime.fromtimestamp(jd)
                         days_old = (datetime.now() - pd).days
-                        score += max(0, 1 - days_old/30) * crit["recency"]
+                        score += max(0, 1 - days_old / 30) * crit["recency"]
                     except Exception:
                         pass
                 job["combined_score"] = score
@@ -398,7 +400,9 @@ class JobSearchAgent:
         result = self.agent.invoke(initial_state)
         final = result["messages"][-1].content
         print("Final result:", final)
-
+        return {
+            "answer": final,
+        }
 
 
 if __name__ == "__main__":
@@ -406,16 +410,18 @@ if __name__ == "__main__":
     llm = GeminiLLM()
     agent = JobSearchAgent(llm=llm, pc=pc)
 
+
     async def test_with_resume():
         resume_data = await get_user_resume(
             index=pc.Index("resumes"),
             user_id="wTTRqelPguXTdc5We6v2wRLsjp62"
         )
         resp = await agent.find_jobs(
-            "Remote Python developer fulltime",
+            "Java developer fulltime",
             resume_data=resume_data,
             top_k=10
         )
         print("Results with resume:", resp)
+
 
     asyncio.run(test_with_resume())
