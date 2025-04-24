@@ -174,7 +174,7 @@ class SupervisorAgent:
         resume_text = state.resume_text
 
         async def run_user_profile():
-            return await self.user_profile_agent.process_user_query(
+            return await self.user_profile_agent.invoke(
                 resume_text=resume_text,
                 prompt=state.current_message
             )
