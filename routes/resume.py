@@ -34,7 +34,7 @@ async def calculate_resume_similarity(
         file_bytes = await resume_file.read()
 
         # Process using the matching agent
-        result = await matching_agent.analyze_resume(file_bytes, job_description)
+        result = await matching_agent.invoke(file_bytes, job_description)
 
         return result
 

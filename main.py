@@ -16,10 +16,11 @@ from context import RequestContextMiddleware
 from dependencies import S3, Firestore
 from routes.auth import router as auth_router
 from routes.chat import router as chat_router
+from routes.follows import router as follows_router
 from routes.jobs import router as jobs_router
 from routes.posts import router as posts_router
 from routes.resume import router as resume_router
-from routes.follows import router as follows_router
+from routes.user_search import router as user_search_router
 from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.supervisor_agent import SupervisorAgent
@@ -29,8 +30,6 @@ from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
-from routes.user_search import router as user_search_router
-from routes.follows import router as follows_router
 
 load_dotenv()
 
@@ -74,7 +73,6 @@ async def lifespan(app: FastAPI):
     resume_matching_agent = ResumeMatchingAgent(
         resume_parser=resume_parser,
         text_embedder=embedder,
-        llm=gemini_llm,
     )
     enhancement_agent = ResumeEnhancementAgent(llm=gemini_llm)
     user_profile_agent = UserProfileAgent(llm=gemini_llm)
