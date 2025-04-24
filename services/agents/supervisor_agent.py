@@ -186,7 +186,7 @@ class SupervisorAgent:
             )
 
         async def run_enhancer():
-            return await self.resume_enhancer.enhance_resume(
+            return await self.resume_enhancer.invoke(
                 resume_text=resume_text,
                 prompt=state.current_message
             )

@@ -1,19 +1,14 @@
-import asyncio
 import json
-import os
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
-from pinecone import Pinecone
 
-from services.agents.tools.get_user_resume import get_user_resume
-from services.gemini import GeminiLLM, ResponseFormat
-
-load_dotenv()
+from services.agents.base.agent import ReActAgent, AgentResponse
+from services.gemini import ResponseFormat, GeminiLLM
 
 
 class EnhancementState(MessagesState):
@@ -23,39 +18,137 @@ class EnhancementState(MessagesState):
     """
     resume_text: str
     prompt: str
+    job_description: Optional[str]
+    formatting_issues: Optional[List[Dict[str, Any]]]
+    ats_analysis: Optional[Dict[str, Any]]
+    content_quality: Optional[Dict[str, Any]]
+    improvement_suggestions: Optional[List[Dict[str, Any]]]
 
-class ResumeEnhancementAgent:
-    def __init__(self, llm: GeminiLLM):
+
+class ResumeEnhancementAgent(ReActAgent):
+    """
+    Agent that analyzes and provides enhancement suggestions for resumes.
+    """
+
+    # List of metadata fields to track
+    METADATA_FIELDS = [
+        "formatting_issues",
+        "ats_analysis",
+        "content_quality",
+        "improvement_suggestions"
+    ]
+
+    def __init__(self, llm: GeminiLLM = GeminiLLM()):
         """
         Initializes the ResumeEnhancementAgent.
 
         Args:
             llm: An instance of GeminiLLM.
         """
-        self.llm = llm
+        super().__init__(llm)
 
-        # Create all the tools using the _create_tools method
-        self.tools = self._create_tools()
-
-        # Bind the tools to the LLM
-        self.llm_with_tools = self.llm.chat.bind_tools(self.tools)
-
-        # Build the ReAct agent state graph.
-        self.builder = StateGraph(EnhancementState)
-        self.builder.add_node("think", self.think)
-        self.builder.add_node("tools", ToolNode(self.tools))
-        self.builder.add_edge(START, "think")
-        self.builder.add_conditional_edges("think", tools_condition)
-        self.builder.add_edge("tools", "think")
-        self.agent = self.builder.compile()
         print("==" * 20)
         print("Resume Enhancer Graph:")
         print("==" * 20)
-        self.agent.get_graph().print_ascii()
+        self.workflow.get_graph().print_ascii()
 
-    def _create_tools(self):
+    def _get_system_prompt(self) -> str:
+        """
+        Return the system prompt for this agent.
+        Implements abstract method from ReActAgent.
+        """
+        return (
+            "You are a resume enhancement assistant focused on targeted analysis. "
+            "Choose tools based on the user prompt and the resume content provided. "
+            "You do NOT need to execute tools in sequence - only use tools that are directly relevant to the user's request. "
+            "You can call the suggestions_tool directly without requiring prior analysis if appropriate."
+        )
+
+    async def invoke(self, **kwargs) -> AgentResponse:
+        """
+        Main entry point for agent execution, implementing the abstract method.
+
+        Args:
+            resume_text: The resume text to analyze
+            prompt: The prompt to guide the analysis
+            job_description: Optional job description for ATS analysis
+
+        Returns:
+            Standardized AgentResponse
+        """
+        resume_text = kwargs.get("resume_text", "")
+        prompt = kwargs.get("prompt", "")
+        job_description = kwargs.get("job_description", "")
+
+        try:
+            # Initialize state
+            initial_state = {
+                "resume_text": resume_text,
+                "prompt": prompt,
+                "job_description": job_description,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+            }
+            # Initialize metadata fields
+            for field in self.METADATA_FIELDS:
+                initial_state[field] = None
+
+            result = await self.workflow.ainvoke(initial_state)
+            return self._format_response(result)
+        except Exception as e:
+            return AgentResponse(
+                answer=f"An error occurred during resume enhancement: {str(e)}",
+                error=str(e),
+                metadata={"agent_type": "resume_enhancer", "error_type": type(e).__name__}
+            )
+
+    def _extract_answer(self, state: Dict[str, Any]) -> str:
+        """
+        Extract final answer from result.
+        Overrides method from Agent base class.
+        """
+        # Use the parent implementation to extract the answer
+        answer = super()._extract_answer(state)
+        print("Enhancer Final Result:")
+        print(answer)
+        return answer
+
+    def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract metadata from the state.
+        Overrides method from Agent base class.
+
+        Returns:
+            Dictionary with metadata fields
+        """
+        metadata = {"agent_type": "resume_enhancer"}
+
+        # Add all tracked fields to metadata
+        for field in self.METADATA_FIELDS:
+            if field in state:
+                metadata[field] = state.get(field)
+
+        return metadata
+
+    def _create_workflow(self) -> CompiledStateGraph:
+        """
+        Create and return the agent's workflow.
+        Implements abstract method from Agent base class.
+        """
+        # Build the ReAct agent state graph
+        builder = StateGraph(EnhancementState)
+        builder.add_node("think", self.think)
+        builder.add_node("tools", ToolNode(self.tools))
+        builder.add_edge(START, "think")
+        builder.add_conditional_edges("think", tools_condition)
+        builder.add_edge("tools", "think")
+        return builder.compile()
+
+    def _create_tools(self) -> List:
         """
         Creates and returns all the tools for the ResumeEnhancer.
+        Implements abstract method from ReActAgent.
 
         Returns:
             List of tools for the ReAct agent.
@@ -130,6 +223,7 @@ class ResumeEnhancementAgent:
                 "You are an ATS (Applicant Tracking System) expert. Analyze the resume for ATS compatibility "
                 "including keyword optimization, scannable format, and parsability. "
                 "If a job description is provided, evaluate keyword matching against that description. "
+                "If no job description is provided, focus on general ATS best practices. "
                 "Format your response as a JSON object with the following structure:\n"
                 "{\n"
                 '  "ats_analysis": {\n'
@@ -151,6 +245,8 @@ class ResumeEnhancementAgent:
             user_message = f"Resume text to analyze:\n{resume_text}"
             if job_description:
                 user_message += f"\n\nJob description to match against:\n{job_description}"
+            else:
+                user_message += "\n\nNo specific job description provided. Analyze for general ATS best practices."
 
             response = self.llm.generate(
                 system_prompt=system_prompt,
@@ -230,20 +326,21 @@ class ResumeEnhancementAgent:
         ) -> Dict[str, Any]:
             """
             Generate specific suggestions to improve the resume based on analysis results.
+            This tool can be called directly without requiring previous analysis.
 
             Args:
                 resume_text: The complete resume text provided as input
-                formatting_issues: Previously identified formatting issues
-                ats_analysis: Results from ATS analysis
-                content_quality: Content quality assessment
+                formatting_issues: Previously identified formatting issues (optional)
+                ats_analysis: Results from ATS analysis (optional)
+                content_quality: Content quality assessment (optional)
 
             Returns:
                 A dictionary containing specific improvement suggestions.
             """
             system_prompt = (
-                "You are a resume improvement expert. Based on the resume text and analysis results, "
+                "You are a resume improvement expert. Based on the resume text and any available analysis results, "
                 "provide specific, actionable suggestions to improve the resume. "
-                "Focus on transforming identified issues into concrete improvements. "
+                "If previous analysis is not available, conduct your own analysis as part of generating suggestions. "
                 "Format your response as a JSON object with the following structure:\n"
                 "{\n"
                 '  "improvement_suggestions": [\n'
@@ -260,17 +357,22 @@ class ResumeEnhancementAgent:
             )
 
             # Create a structured analysis summary for the LLM
-            analysis_summary = {
-                "formatting_issues": formatting_issues or [],
-                "ats_analysis": ats_analysis or {},
-                "content_quality": content_quality or {}
-            }
+            analysis_summary = {}
+            if formatting_issues:
+                analysis_summary["formatting_issues"] = formatting_issues
+            if ats_analysis:
+                analysis_summary["ats_analysis"] = ats_analysis
+            if content_quality:
+                analysis_summary["content_quality"] = content_quality
 
-            user_message = (
-                f"Resume text:\n{resume_text}\n\n"
-                f"Analysis results:\n{json.dumps(analysis_summary, indent=2)}\n\n"
-                f"Please provide specific suggestions for improvement."
-            )
+            user_message = f"Resume text:\n{resume_text}\n\n"
+
+            if analysis_summary:
+                user_message += f"Analysis results:\n{json.dumps(analysis_summary, indent=2)}\n\n"
+            else:
+                user_message += "No previous analysis available. Please analyze the resume and provide suggestions directly.\n\n"
+
+            user_message += "Please provide specific suggestions for improvement."
 
             response = self.llm.generate(
                 system_prompt=system_prompt,
@@ -289,71 +391,48 @@ class ResumeEnhancementAgent:
     def think(self, state: EnhancementState) -> Dict[str, Any]:
         """
         Assistant node that evaluates the current state and executes the next required tool
-        without repeating previously used tools.
+        based on the user's request, not necessarily in sequence.
+        Extends the think method from ReActAgent.
         """
         resume_text = state.get("resume_text", "")
         prompt = state.get("prompt", "")
+        job_description = state.get("job_description", "")
+
+        # Create a new state dictionary, preserving all existing fields
+        new_state = dict(state)
+
+        # Transfer all tracked fields from current state to new state
+        for field in self.METADATA_FIELDS:
+            if field in state and state[field] is not None:
+                new_state[field] = state[field]
+
         sys_msg = SystemMessage(
             content=(
-                "You are a resume enhancement assistant focused on systematic analysis. "
-                "Important: Do not repeat tools that have already been called. "
-                "Choose tools only based on the user prompt\n"
+                "You are a resume enhancement assistant focused on targeted analysis. "
+                "Choose tools based on what the user is specifically asking for. "
+                "Important: You do NOT need to execute tools in a specific sequence. "
+                "You can call any tool directly based on what's needed, including the suggestions_tool "
+                "without requiring prior analysis tools."
+                "\n\n"
                 f"User Prompt: {prompt}"
             )
         )
 
-        messages: list[BaseMessage] = [sys_msg] + state["messages"]
+        messages: list[BaseMessage] = [sys_msg] + state.get("messages", [])
 
         if not messages[-1].content.startswith("Here is a candidate's resume"):
             messages.append(
                 HumanMessage(
                     content=(
                         f"Here is a candidate's resume:\n{resume_text}\n\n"
-                        "Continue the analysis using the next appropriate tool in sequence."
+                        f"Job description (if provided): {job_description}\n\n"
+                        "Based on the user's request, choose the appropriate tool(s) to execute. "
+                        "You don't need to run all tools - only what's directly relevant to the request."
                     )
                 )
             )
 
+        # Use the llm_with_tools from ReActAgent parent class
         invocation = self.llm_with_tools.invoke(messages)
-        return {"messages": [invocation]}
-
-    async def enhance_resume(self, resume_text: str, prompt: str) -> Dict[str, Any]:
-        """
-        Runs the ReAct agent graph using the provided resume text and prints the result.
-
-        Args:
-            resume_text: The resume text to analyze
-            prompt: The prompt to guide the analysis
-        """
-        initial_state = {
-            "resume_text": resume_text,
-            "prompt": prompt,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-        }
-        result = self.agent.invoke(initial_state)
-        print("Enhancer Final Result:")
-        print(result["messages"][-1].content)
-        return {
-            "answer": result["messages"][-1].content,
-            "error": None
-        }
-
-
-if __name__ == "__main__":
-    user_id = "oPmOJhSE0VQid56yYyg19hdH5DV2"
-    index = Pinecone(api_key=os.environ["PINECONE_API_KEY"]).Index("resumes")
-    resume_data = asyncio.run(get_user_resume(index, user_id))
-    if not resume_data.get("text"):
-        print("Resume text not found")
-        exit(1)
-
-    # Instantiate GeminiLLM
-    gemini_llm = GeminiLLM()
-
-    # Create the ResumeEnhancer instance
-    enhancer = ResumeEnhancementAgent(gemini_llm)
-
-    # Run the agent graph to analyze the resume with optional job description
-    asyncio.run(enhancer.enhance_resume(resume_data["text"], "Analyze this resume for ATS compatibility and content quality."))
+        new_state["messages"] = messages + [invocation]
+        return new_state
