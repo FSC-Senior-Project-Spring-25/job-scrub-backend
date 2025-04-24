@@ -402,9 +402,19 @@ class ResumeEnhancementAgent(ReActAgent):
         new_state = dict(state)
 
         # Transfer all tracked fields from current state to new state
-        for field in self.METADATA_FIELDS:
-            if field in state and state[field] is not None:
-                new_state[field] = state[field]
+        messages = state.get("messages", [])
+        if messages:
+            last_message = messages[-1]
+            if hasattr(last_message, 'tool_call_id'):
+                try:
+                    # Try to parse content as JSON if it's a tool response
+                    content = json.loads(last_message.content)
+                    # Update any matching metadata fields from the content
+                    for field in self.METADATA_FIELDS:
+                        if field in content:
+                            new_state[field] = content[field]
+                except (json.JSONDecodeError, AttributeError):
+                    pass
 
         sys_msg = SystemMessage(
             content=(
