@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Union, TypedDict
+
 from langchain_core.messages import SystemMessage, BaseMessage
-from langgraph.graph import StateGraph, MessagesState
+from langgraph.graph import MessagesState
+from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel
 
 from services.gemini import GeminiLLM
@@ -30,7 +32,7 @@ class Agent(ABC):
         pass
 
     @abstractmethod
-    def _create_workflow(self) -> StateGraph:
+    def _create_workflow(self) -> CompiledStateGraph:
         """Create and return the agent's workflow"""
         pass
 
@@ -59,10 +61,11 @@ class Agent(ABC):
 class ReActAgent(Agent):
     """Base class for ReAct pattern agents"""
 
-    def __init__(self, llm):
-        super().__init__(llm)
+    def __init__(self, llm: GeminiLLM = GeminiLLM()):
+        self.llm = llm
         self.tools = self._create_tools()
         self.llm_with_tools = self.llm.chat.bind_tools(self.tools)
+        super().__init__(llm)
 
     @abstractmethod
     def _create_tools(self) -> List:
