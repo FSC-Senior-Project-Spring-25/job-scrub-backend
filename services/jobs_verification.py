@@ -14,6 +14,30 @@ class JobsVerificationService:
         self.index = index
         self.embedder = embedder
 
+    async def get_jobs(self, job_ids: list[str]) -> dict:
+        """
+        Get multiple jobs from the Pinecone index using their IDs
+
+        Args:
+            job_ids: List of job IDs to retrieve
+
+        Returns:
+            Dictionary of job IDs mapped to their job data
+        """
+        try:
+            response = self.index.fetch(ids=job_ids, namespace="jobs")
+            jobs = {}
+
+            for job_id, vector in response.vectors.items():
+                jobs[job_id] = {
+                    "id": vector.id,
+                    "metadata": vector.metadata,
+                }
+
+            return jobs
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     async def get_all_jobs(self, limit=1000) -> list[dict]:
         """
         Get all jobs from the Pinecone index

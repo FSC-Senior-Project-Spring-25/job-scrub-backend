@@ -25,6 +25,25 @@ async def delete_job(job_id: str, job_service: JobVerifier):
     return {"message": "Job deleted successfully"}
 
 
+@router.post("/fetch")
+async def fetch_jobs(ids: list[str], job_service: JobVerifier):
+    """
+    Fetch multiple jobs by their IDs
+
+    Args:
+        ids: List of job IDs to fetch
+        job_service: JobVerifier service
+
+    Returns:
+        Dictionary of job IDs mapped to their job data
+    """
+    jobs = await job_service.get_jobs(ids)
+    if jobs:
+        return jobs
+    else:
+        return {"message": "Jobs not found"}
+
+
 @router.get("/unverified")
 async def get_unverified_jobs(
         job_service: JobVerifier,
