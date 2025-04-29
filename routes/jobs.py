@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from fastapi.params import Query
 
 from dependencies import JobPoster, JobVerifier
 from models.job_report import JobReport
@@ -25,6 +26,9 @@ async def delete_job(job_id: str, job_service: JobVerifier):
 
 
 @router.get("/unverified")
-async def get_unverified_jobs(job_service: JobVerifier):
-    jobs = await job_service.get_unverified_jobs()
+async def get_unverified_jobs(
+        job_service: JobVerifier,
+        limit: int = Query(1000, gt=0, le=1000)
+):
+    jobs = await job_service.get_unverified_jobs(limit=limit)
     return jobs

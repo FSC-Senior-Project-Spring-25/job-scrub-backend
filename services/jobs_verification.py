@@ -14,7 +14,7 @@ class JobsVerificationService:
         self.index = index
         self.embedder = embedder
 
-    async def get_unverified_jobs(self, limit=100) -> list[dict]:
+    async def get_unverified_jobs(self, limit=1000) -> list[dict]:
         """
         Get unverified jobs from the Pinecone index using a vector query with filter
 
