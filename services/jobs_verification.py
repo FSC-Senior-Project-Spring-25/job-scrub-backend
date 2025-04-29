@@ -49,25 +49,32 @@ class JobsVerificationService:
             A list of all job postings
         """
         try:
-            dummy_vector = [0.0] * self.embedder.dim
+            # Pinecone's list() returns IDs directly as a generator
+            job_ids = []
+            for id_batch in self.index.list(namespace="jobs"):
+                job_ids.extend(id_batch)
+                if len(job_ids) >= limit:
+                    job_ids = job_ids[:limit]
+                    break
 
-            response = self.index.query(
-                namespace="jobs",
-                vector=dummy_vector,
-                filter={},  # empty filter to get all jobs
-                top_k=limit,
-                include_metadata=True
-            )
+            if not job_ids:
+                return []
 
-            # Format the results
-            all_jobs = []
-            for match in response.matches:
-                all_jobs.append({
-                    "id": match.id,
-                    "metadata": match.metadata,
-                })
+            # Fetch the jobs in batches
+            jobs = {}
+            batch_size = 100
 
-            return all_jobs
+            for i in range(0, len(job_ids), batch_size):
+                batch_ids = job_ids[i:i + batch_size]
+                response = self.index.fetch(ids=batch_ids, namespace="jobs")
+
+                for job_id, vector in response.vectors.items():
+                    jobs[job_id] = {
+                        "id": vector.id,
+                        "metadata": vector.metadata,
+                    }
+
+            return list(jobs.values())
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

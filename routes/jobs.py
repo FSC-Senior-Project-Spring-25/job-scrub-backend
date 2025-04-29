@@ -52,6 +52,7 @@ async def get_unverified_jobs(
     jobs = await job_service.get_unverified_jobs(limit=limit)
     return jobs
 
+
 @router.get("/all")
 async def get_all_jobs(
         job_service: JobVerifier,
