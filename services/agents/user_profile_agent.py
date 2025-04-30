@@ -39,11 +39,6 @@ class UserProfileAgent(ReActAgent):
         """
         super().__init__(llm)
 
-        print("==" * 20)
-        print("User Profile Agent Graph:")
-        print("==" * 20)
-        self.workflow.get_graph().print_ascii()
-
     def _get_system_prompt(self) -> str:
         """
         Return the system prompt for this agent.

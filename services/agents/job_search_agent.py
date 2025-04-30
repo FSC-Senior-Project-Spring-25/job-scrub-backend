@@ -24,10 +24,6 @@ class JobSearchAgent(ReActAgent):
         self.job_index = job_index
         self.resume_vector = resume_vector
         super().__init__(llm)
-        print("==" * 20)
-        print("JobSearchAgent Workflow:")
-        print("==" * 20)
-        self.workflow.get_graph().print_ascii()
 
     async def invoke(self, prompt: str) -> AgentResponse:
         initial_state = {

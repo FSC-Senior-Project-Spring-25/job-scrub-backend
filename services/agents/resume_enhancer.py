@@ -47,11 +47,6 @@ class ResumeEnhancementAgent(ReActAgent):
         """
         super().__init__(llm)
 
-        print("==" * 20)
-        print("Resume Enhancer Graph:")
-        print("==" * 20)
-        self.workflow.get_graph().print_ascii()
-
     def _get_system_prompt(self) -> str:
         """
         Return the system prompt for this agent.
