@@ -64,7 +64,7 @@ class ResumeEnhancementAgent(ReActAgent):
             "You can call the suggestions_tool directly without requiring prior analysis if appropriate."
         )
 
-    async def invoke(self, **kwargs) -> AgentResponse:
+    async def invoke(self, resume_text: str, prompt: str, job_description: Optional[str] = None) -> AgentResponse:
         """
         Main entry point for agent execution, implementing the abstract method.
 
@@ -76,10 +76,6 @@ class ResumeEnhancementAgent(ReActAgent):
         Returns:
             Standardized AgentResponse
         """
-        resume_text = kwargs.get("resume_text", "")
-        prompt = kwargs.get("prompt", "")
-        job_description = kwargs.get("job_description", "")
-
         try:
             # Initialize state
             initial_state = {

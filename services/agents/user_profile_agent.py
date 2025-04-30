@@ -56,7 +56,7 @@ class UserProfileAgent(ReActAgent):
             "2. Answer the user's question or provide a profile summary using profile information\n\n"
         )
 
-    async def invoke(self, **kwargs) -> AgentResponse:
+    async def invoke(self, resume_text:str, prompt: str) -> AgentResponse:
         """
         Process a query about a resume
         Implements abstract method from Agent base class.
@@ -68,9 +68,6 @@ class UserProfileAgent(ReActAgent):
         Returns:
             Dictionary with the response
         """
-        resume_text = kwargs.get("resume_text", "")
-        prompt = kwargs.get("prompt", "")
-
         try:
             # Initialize state
             initial_state = {
