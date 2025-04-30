@@ -74,15 +74,6 @@ async def lifespan(app: FastAPI):
         resume_parser=resume_parser,
         text_embedder=embedder,
     )
-    enhancement_agent = ResumeEnhancementAgent(llm=gemini_llm)
-    user_profile_agent = UserProfileAgent(llm=gemini_llm)
-    supervisor_agent = SupervisorAgent(
-        llm=gemini_llm,
-        pc=pc,
-        resume_matcher=resume_matching_agent,
-        resume_enhancer=enhancement_agent,
-        user_profile_agent=user_profile_agent,
-    )
 
     app.state.session = session
     app.state.s3_service = s3
@@ -94,9 +85,6 @@ async def lifespan(app: FastAPI):
     app.state.job_verification_service = job_verification_service
     app.state.gemini_llm = gemini_llm
     app.state.resume_agent = resume_matching_agent
-    app.state.resume_enhancer = enhancement_agent
-    app.state.user_profile_agent = user_profile_agent
-    app.state.supervisor_agent = supervisor_agent
 
     yield
     # Cleanup resources
