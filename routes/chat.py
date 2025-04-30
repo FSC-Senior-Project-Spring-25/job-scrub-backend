@@ -28,7 +28,7 @@ async def chat(
         llm: LLM,
         pinecone: PineconeClient,
         message: str = Form(...),
-        files: Optional[List[UploadFile]] = File(None),
+        resume_file: Optional[UploadFile] = File(None),
         conversation_history: str = Form("[]"),
 ):
     """
@@ -37,7 +37,7 @@ async def chat(
     try:
         print(f"[CHAT] Processing message: {message[:50]}...")
         print(f"[CHAT] User: {current_user.user_id}")
-        print(f"[CHAT] Files: {len(files) if files else 0}")
+        print(f"[CHAT] Resume file: {resume_file.filename if resume_file else 'None'}")
 
         # Parse conversation history
         history = json.loads(conversation_history)
@@ -49,7 +49,7 @@ async def chat(
             pinecone_client=pinecone,
             llm=llm,
             conversation_history=history,
-            files=files,
+            resume_file=resume_file,
             resume_parser=parser
         )
 
