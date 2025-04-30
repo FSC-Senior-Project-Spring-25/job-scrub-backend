@@ -19,11 +19,13 @@ from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.chat_handler import handle_chat
 from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
+from services.agents.user_search_agent import UserSearchAgent
 from services.gemini import GeminiLLM, ResponseFormat
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
 load_dotenv()
+
 
 class AgentFlags(Flag):
     """Flags for each agent type to allow multiple selections"""
@@ -33,6 +35,7 @@ class AgentFlags(Flag):
     RESUME_ENHANCER = 4
     USER_PROFILE = 8
     JOB_SEARCH = 16
+    USER_SEARCH = 32
 
 
 @dataclass
@@ -55,13 +58,14 @@ class SupervisorAgent:
     """
 
     def __init__(
-        self,
-        llm: GeminiLLM,
-        pc: Pinecone,
-        resume_matcher: ResumeMatchingAgent,
-        resume_enhancer: ResumeEnhancementAgent,
-        user_profile_agent: UserProfileAgent,
-        job_search_agent: JobSearchAgent
+            self,
+            llm: GeminiLLM,
+            pc: Pinecone,
+            resume_matcher: ResumeMatchingAgent,
+            resume_enhancer: ResumeEnhancementAgent,
+            user_profile_agent: UserProfileAgent,
+            job_search_agent: JobSearchAgent,
+            user_search_agent: UserSearchAgent
     ):
         self.llm = llm
         self.pc = pc
@@ -69,14 +73,15 @@ class SupervisorAgent:
         self.resume_enhancer = resume_enhancer
         self.user_profile_agent = user_profile_agent
         self.job_search_agent = job_search_agent
+        self.user_search_agent = user_search_agent
         self.workflow = self._create_workflow()
 
     async def process_message(
-        self,
-        user_id: str,
-        message: str,
-        conversation_history: List[Dict[str, Any]],
-        files: Optional[List[Dict[str, Any]]] = None
+            self,
+            user_id: str,
+            message: str,
+            conversation_history: List[Dict[str, Any]],
+            files: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         # Convert conversation history to Message objects
         history = [
@@ -138,6 +143,7 @@ class SupervisorAgent:
         - RESUME_ENHANCER: For requests to improve, enhance, optimize, or get feedback on resumes
         - USER_PROFILE: For questions about the user's skills, background, profile, or identity
         - JOB_SEARCH: For requests to find or search for job postings
+        - USER_SEARCH: For requests to find or search users with resumes matching specific criteria
         - CHAT: For general conversation or questions not covered by specialized agents
 
         Multiple agents can be activated simultaneously. Select all applicable agents.
@@ -160,6 +166,7 @@ class SupervisorAgent:
                 "RESUME_ENHANCER": AgentFlags.RESUME_ENHANCER,
                 "USER_PROFILE": AgentFlags.USER_PROFILE,
                 "JOB_SEARCH": AgentFlags.JOB_SEARCH,
+                "USER_SEARCH": AgentFlags.USER_SEARCH,
                 "CHAT": AgentFlags.CHAT
             }
 
@@ -203,6 +210,11 @@ class SupervisorAgent:
                 prompt=state.current_message
             )
 
+        async def run_user_search():
+            return await self.user_search_agent.invoke(
+                prompt=state.current_message
+            )
+
         async def run_chat():
             resp = await handle_chat(
                 llm=self.llm,
@@ -217,7 +229,8 @@ class SupervisorAgent:
             AgentFlags.USER_PROFILE: ("user_profile", run_user_profile),
             AgentFlags.RESUME_MATCHER: ("resume_matcher", run_matcher),
             AgentFlags.RESUME_ENHANCER: ("resume_enhancer", run_enhancer),
-            AgentFlags.JOB_SEARCH: ("job_search", run_job_search)
+            AgentFlags.JOB_SEARCH: ("job_search", run_job_search),
+            AgentFlags.USER_SEARCH: ("user_search", run_user_search),
         }
 
         # Build task list - call the functions here to create coroutines
@@ -307,7 +320,8 @@ class SupervisorAgent:
         ts = datetime.now().isoformat()
         # Append user and assistant messages
         state.conversation_history.append(Message(role="user", content=state.current_message, timestamp=ts))
-        state.conversation_history.append(Message(role="assistant", content=state.final_response, timestamp=ts, metadata={"agents": [f.name.lower() for f in AgentFlags if f in state.active_agents and f != AgentFlags.NONE]}))
+        state.conversation_history.append(Message(role="assistant", content=state.final_response, timestamp=ts, metadata={
+            "agents": [f.name.lower() for f in AgentFlags if f in state.active_agents and f != AgentFlags.NONE]}))
         return {"conversation_history": state.conversation_history}
 
     def _create_workflow(self) -> CompiledStateGraph:
@@ -337,7 +351,8 @@ if __name__ == "__main__":
         resume_matcher=ResumeMatchingAgent(resume_parser=ResumeParser(), text_embedder=TextEmbedder(), llm=gemini_llm),
         resume_enhancer=ResumeEnhancementAgent(gemini_llm),
         user_profile_agent=UserProfileAgent(gemini_llm),
-        job_search_agent=JobSearchAgent(gemini_llm, pc.Index("job-postings"), resume_data["vector"])
+        job_search_agent=JobSearchAgent(gemini_llm, pc.Index("job-postings"), resume_data["vector"]),
+        user_search_agent=UserSearchAgent(gemini_llm, pc.Index("resumes"), resume_data["vector"])
     )
 
     # Example usage
@@ -350,6 +365,6 @@ if __name__ == "__main__":
         }
     ]
     files = None  # Replace with actual file data if needed
-    message = "Find remote jobs"
+    message = "Search for users with Python skills"
     response = asyncio.run(supervisor.process_message(user_id, message, conversation_history, files))
     print(response)
