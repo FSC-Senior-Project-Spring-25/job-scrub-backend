@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 
+from fastapi import UploadFile
 from pinecone import Pinecone
 
 from models.chat import Message
@@ -20,7 +21,7 @@ async def create_supervisor_agent(
         pinecone_client: Pinecone,
         llm: GeminiLLM = GeminiLLM(),
         conversation_history: Optional[List[Dict[str, Any]]] = None,
-        files: Optional[List[Dict[str, Any]]] = None,
+        files: Optional[List[UploadFile]] = None,
         resume_parser: ResumeParser = ResumeParser(),
         text_embedder: TextEmbedder = TextEmbedder(),
 ) -> SupervisorAgent:
@@ -28,18 +29,37 @@ async def create_supervisor_agent(
     Create a new SupervisorAgent instance for a chat session
 
     Args:
-        message: The current message being processed
-        conversation_history: Previous conversation history
         user_id: Current user's ID
         pinecone_client: Pinecone client instance
         llm: LLM instance
+        conversation_history: Previous conversation history
+        files: Optional list of uploaded files
         resume_parser: Resume parser instance
         text_embedder: Text embedder instance
-        files: Optional list of processed files
 
     Returns:
         A new SupervisorAgent instance with initialized state
     """
+    # Process any uploaded files
+    processed_files = []
+    if files:
+        for file in files:
+            file_bytes = await file.read()
+            file_type = "text"
+            content = None
+
+            if file.filename.endswith('.pdf'):
+                file_type = "pdf"
+                content = resume_parser.parse_pdf(file_bytes)
+
+            processed_files.append({
+                "filename": file.filename,
+                "type": file_type,
+                "bytes": file_bytes,
+                "content": content
+            })
+        print(f"[CREATE_SUPERVISOR] Processed {len(processed_files)} files")
+
     # Convert conversation history to Message objects
     history = []
     if conversation_history:
@@ -58,7 +78,6 @@ async def create_supervisor_agent(
         index=pinecone_client.Index("resumes"),
         user_id=user_id
     )
-    resume_text = resume_data.get("text", "")
     print("Resume Data:", resume_data)
 
     # Create the matcher agent
@@ -98,7 +117,8 @@ async def create_supervisor_agent(
         job_search_agent=job_search_agent,
         user_search_agent=user_search_agent,
         resume_data=resume_data,
-        processed_conversation_history=history
+        processed_conversation_history=history,
+        processed_files=processed_files if processed_files else None,
     )
 
     return supervisor

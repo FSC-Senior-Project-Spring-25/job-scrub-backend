@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 from fastapi import APIRouter, Form, UploadFile, File
 from fastapi.responses import StreamingResponse
@@ -11,47 +11,10 @@ from services.agents.tools.create_supervisor_agent import create_supervisor_agen
 router = APIRouter()
 
 
-async def process_files(files: List[UploadFile], parser: Parser) -> List[Dict[str, Any]]:
-    """
-    Process uploaded files and extract content
-
-    Args:
-        files: List of uploaded files
-        parser: Parser service to extract content
-
-    Returns:
-        List of processed file data
-    """
-    processed_files = []
-
-    for file in files:
-        file_bytes = await file.read()
-        file_type = "text"
-        content = None
-
-        if file.filename.endswith('.pdf'):
-            file_type = "pdf"
-            content = parser.parse_pdf(file_bytes)
-
-        processed_files.append({
-            "filename": file.filename,
-            "type": file_type,
-            "bytes": file_bytes,
-            "content": content
-        })
-
-    return processed_files
-
-
-async def generate_stream_response(supervisor, user_id, message, history, files):
+async def generate_stream_response(supervisor, message):
     """Generate a streaming response from the supervisor agent"""
     try:
-        async for chunk in supervisor.process_message(
-                user_id=user_id,
-                message=message,
-                conversation_history=history,
-                files=files
-        ):
+        async for chunk in supervisor.process_message(message=message, ):
             yield f"data: {json.dumps(chunk)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
@@ -80,28 +43,21 @@ async def chat(
         history = json.loads(conversation_history)
         print(f"[CHAT] History items: {len(history)}")
 
-        # Process any uploaded files
-        processed_files = await process_files(files or [], parser)
-        print(f"[CHAT] Processed files: {len(processed_files)}")
-
         # Create a new supervisor agent for this request
         supervisor = await create_supervisor_agent(
             user_id=current_user.user_id,
             pinecone_client=pinecone,
             llm=llm,
             conversation_history=history,
-            files=processed_files if processed_files else None,
+            files=files,
             resume_parser=parser
         )
 
         # Return a streaming response
         return StreamingResponse(
             generate_stream_response(
-                supervisor,
-                current_user.user_id,
-                message,
-                history,
-                processed_files if processed_files else None
+                supervisor=supervisor,
+                message=message,
             ),
             media_type="text/event-stream"
         )

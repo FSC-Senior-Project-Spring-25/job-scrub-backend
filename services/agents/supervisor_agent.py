@@ -67,7 +67,8 @@ class SupervisorAgent:
             job_search_agent: JobSearchAgent,
             user_search_agent: UserSearchAgent,
             resume_data: Optional[Dict[str, Any]] = None,
-            processed_conversation_history: Optional[List[Message]] = None
+            processed_conversation_history: Optional[List[Message]] = None,
+            processed_files: Optional[List[Dict[str, Any]]] = None
     ):
         self.llm = llm
         self.pc = pc
@@ -78,22 +79,18 @@ class SupervisorAgent:
         self.user_search_agent = user_search_agent
         self.resume_text = resume_data.get("text", "") if resume_data else ""
         self.processed_history = processed_conversation_history or []
+        self.processed_files = processed_files or []
         self.workflow = self._create_workflow()
 
     async def process_message(
             self,
-            user_id: str,
             message: str,
-            conversation_history: List[Dict[str, Any]],
-            files: Optional[List[Dict[str, Any]]] = None
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Process a message with streaming response
 
         Args:
-            user_id: The user's ID
             message: The user's message
-            conversation_history: Previous conversation (will use processed history)
             files: Any uploaded files
 
         Yields:
@@ -106,7 +103,7 @@ class SupervisorAgent:
             current_message=message,
             resume_text=self.resume_text,
             conversation_history=self.processed_history,
-            files=files,
+            files=self.processed_files,
             active_agents=AgentFlags.NONE,
             agent_results={},
             final_response=None,
@@ -323,7 +320,9 @@ class SupervisorAgent:
         active_agents = state.active_agents
         agent_results = state.agent_results
         user_query = state.current_message
-
+        print("Streaming synthesis for user query:", user_query)
+        print("Active agents for synthesis:", active_agents)
+        print("Agent results for synthesis:", agent_results)
         # If there was an error and no agent results, return the error
         if state.error and not agent_results:
             yield f"I'm sorry, I encountered an error: {state.error}"
