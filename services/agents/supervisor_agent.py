@@ -12,6 +12,8 @@ from langgraph.graph.state import CompiledStateGraph
 from pinecone import Pinecone
 
 from models.chat import Message
+from services.agents.base.agent import AgentResponse
+from services.agents.job_search_agent import JobSearchAgent
 from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.chat_handler import handle_chat
@@ -30,6 +32,7 @@ class AgentFlags(Flag):
     RESUME_MATCHER = 2
     RESUME_ENHANCER = 4
     USER_PROFILE = 8
+    JOB_SEARCH = 16
 
 
 @dataclass
@@ -41,7 +44,7 @@ class SupervisorState:
     conversation_history: List[Message]
     files: Optional[List[Dict[str, Any]]] = None
     active_agents: AgentFlags = AgentFlags.NONE
-    agent_results: Dict[str, Any] = None
+    agent_results: Dict[str, AgentResponse] = None
     final_response: Optional[str] = None
     error: Optional[str] = None
 
@@ -58,12 +61,14 @@ class SupervisorAgent:
         resume_matcher: ResumeMatchingAgent,
         resume_enhancer: ResumeEnhancementAgent,
         user_profile_agent: UserProfileAgent,
+        job_search_agent: JobSearchAgent
     ):
         self.llm = llm
         self.pc = pc
         self.resume_matcher = resume_matcher
         self.resume_enhancer = resume_enhancer
         self.user_profile_agent = user_profile_agent
+        self.job_search_agent = job_search_agent
         self.workflow = self._create_workflow()
 
     async def process_message(
@@ -132,6 +137,7 @@ class SupervisorAgent:
         - RESUME_MATCHER: For questions about job fit, matching resumes to jobs, or compatibility with positions
         - RESUME_ENHANCER: For requests to improve, enhance, optimize, or get feedback on resumes
         - USER_PROFILE: For questions about the user's skills, background, profile, or identity
+        - JOB_SEARCH: For requests to find or search for job postings
         - CHAT: For general conversation or questions not covered by specialized agents
 
         Multiple agents can be activated simultaneously. Select all applicable agents.
@@ -153,6 +159,7 @@ class SupervisorAgent:
                 "RESUME_MATCHER": AgentFlags.RESUME_MATCHER,
                 "RESUME_ENHANCER": AgentFlags.RESUME_ENHANCER,
                 "USER_PROFILE": AgentFlags.USER_PROFILE,
+                "JOB_SEARCH": AgentFlags.JOB_SEARCH,
                 "CHAT": AgentFlags.CHAT
             }
 
@@ -170,7 +177,7 @@ class SupervisorAgent:
 
     async def _execute_agents(self, state: SupervisorState) -> Dict[str, Any]:
         active_agents = state.active_agents
-        agent_results: Dict[str, Any] = {}
+        agent_results: Dict[str, AgentResponse] = {}
         resume_text = state.resume_text
 
         async def run_user_profile():
@@ -191,6 +198,11 @@ class SupervisorAgent:
                 prompt=state.current_message
             )
 
+        async def run_job_search():
+            return await self.job_search_agent.invoke(
+                prompt=state.current_message
+            )
+
         async def run_chat():
             resp = await handle_chat(
                 llm=self.llm,
@@ -198,26 +210,29 @@ class SupervisorAgent:
                 conversation_history=state.conversation_history,
                 files=state.files
             )
-            return {"response": resp}
+            return AgentResponse(answer=resp)
 
-        # Map agent flags to their corresponding functions
+        # Map agent flags to their corresponding functions (without calling them yet)
         agent_functions = {
-            AgentFlags.USER_PROFILE: ("user_profile", run_user_profile()),
-            AgentFlags.RESUME_MATCHER: ("resume_matcher", run_matcher()),
-            AgentFlags.RESUME_ENHANCER: ("resume_enhancer", run_enhancer()),
+            AgentFlags.USER_PROFILE: ("user_profile", run_user_profile),
+            AgentFlags.RESUME_MATCHER: ("resume_matcher", run_matcher),
+            AgentFlags.RESUME_ENHANCER: ("resume_enhancer", run_enhancer),
+            AgentFlags.JOB_SEARCH: ("job_search", run_job_search)
         }
 
-        # Build task list using comprehension
-        tasks = [agent_functions[flag] for flag in agent_functions if flag in active_agents]
+        # Build task list - call the functions here to create coroutines
+        tasks = [(key, func()) for key, func in
+                 [agent_functions[flag] for flag in agent_functions if flag in active_agents]]
 
         # Add chat task if no other tasks or if explicitly requested
         if AgentFlags.CHAT in active_agents or not tasks:
             tasks.append(("chat", run_chat()))
 
         # Execute in parallel
-        results = await asyncio.gather(*(t for _, t in tasks), return_exceptions=True)
+        results = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
+
         for (key, _), result in zip(tasks, results):
-            agent_results[key] = ("error" if isinstance(result, Exception) else result)
+            agent_results[key] = result if not isinstance(result, Exception) else {"error": str(result)}
 
         return {"agent_results": agent_results}
 
@@ -246,7 +261,12 @@ class SupervisorAgent:
                 return {"final_response": f"I'm sorry, I encountered an error: {chat_result['error']}"}
             return {"final_response": chat_result["response"]}
 
-        # For complex responses requiring synthesis from multiple agents
+        print("Agent results:", agent_results)
+        # Convert AgentResponse objects to dictionaries for JSON serialization
+        serialized_results = {
+            key: response.model_dump_json() for key, response in agent_results.items()
+        }
+
         synthesis_prompt = f"""
         Synthesize the following agent results into a well-formatted markdown response that directly addresses the user's query:
 
@@ -254,7 +274,7 @@ class SupervisorAgent:
         {user_query}
         
         RESULTS:
-        {json.dumps(agent_results, indent=2)}
+        {json.dumps(serialized_results, indent=2)}
 
         Focus on providing a response that actually answers what the user is asking. Only include information that is relevant to their specific question.
         Guidelines for response formatting:
@@ -269,7 +289,6 @@ class SupervisorAgent:
         Important: The response should be well-structured, focused only on answering what the user asked,
         and appear as if it came from a single intelligent assistant.
         """
-        print("Synthesis prompt:", synthesis_prompt)
         # Generate synthesized response
         response = await self.llm.agenerate(
             system_prompt="You are an expert resume consultant that provides focused, relevant answers to user questions.",
@@ -307,17 +326,18 @@ class SupervisorAgent:
 
 if __name__ == "__main__":
     user_id = "oPmOJhSE0VQid56yYyg19hdH5DV2"
-
+    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
     # Instantiate GeminiLLM
     gemini_llm = GeminiLLM()
-
+    resume_data = asyncio.run(get_user_resume(index=pc.Index("resumes"), user_id=user_id))
     # Create the ResumeEnhancer instance
     supervisor = SupervisorAgent(
         llm=gemini_llm,
-        pc=Pinecone(api_key=os.environ["PINECONE_API_KEY"]),
+        pc=pc,
         resume_matcher=ResumeMatchingAgent(resume_parser=ResumeParser(), text_embedder=TextEmbedder(), llm=gemini_llm),
         resume_enhancer=ResumeEnhancementAgent(gemini_llm),
-        user_profile_agent=UserProfileAgent(gemini_llm)
+        user_profile_agent=UserProfileAgent(gemini_llm),
+        job_search_agent=JobSearchAgent(gemini_llm, pc.Index("job-postings"), resume_data["vector"])
     )
 
     # Example usage
@@ -330,5 +350,6 @@ if __name__ == "__main__":
         }
     ]
     files = None  # Replace with actual file data if needed
-    message = "Is my resume ATS compliant?"
+    message = "Find remote jobs"
     response = asyncio.run(supervisor.process_message(user_id, message, conversation_history, files))
+    print(response)
