@@ -13,6 +13,39 @@ class JobsVerificationService:
         self.session = session
         self.index = index
         self.embedder = embedder
+# method for getting all jobs
+    async def get_all_jobs(self, limit=100) -> list[dict]:
+        """
+        Get all jobs from the Pinecone index 
+        
+        Args:
+            limit: The maximum number of jobs to return
+            
+        Returns:
+            A list of all job postings
+        """
+        try:
+            dummy_vector = [0.0] * self.embedder.dim
+
+            response = self.index.query(
+                namespace="jobs",
+                vector=dummy_vector,
+                filter={} , # empty filter to get all jobs
+                top_k=limit,
+                include_metadata=True
+            )
+
+            # Format the results
+            all_jobs = []
+            for match in response.matches:
+                all_jobs.append({
+                    "id": match.id,
+                    "metadata": match.metadata,
+                })
+
+            return all_jobs
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     async def get_unverified_jobs(self, limit=100) -> list[dict]:
         """

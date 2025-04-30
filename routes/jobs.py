@@ -28,3 +28,8 @@ async def delete_job(job_id: str, job_service: JobVerifier):
 async def get_unverified_jobs(job_service: JobVerifier):
     jobs = await job_service.get_unverified_jobs()
     return jobs
+
+@router.get("/all")
+async def get_all_jobs(job_service: JobVerifier):
+    jobs = await job_service.get_all_jobs()
+    return jobs
