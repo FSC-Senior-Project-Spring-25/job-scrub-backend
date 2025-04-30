@@ -123,7 +123,9 @@ async def get_resume_data(
         resume_text = resume_file_data["text"]
         embeddings = await text_embedder.get_embeddings([resume_text])
         resume_vector = embeddings[0].tolist()
-
+        print(f"[CREATE_SUPERVISOR] Generated vector for uploaded resume")
+        print(f"[CREATE_SUPERVISOR] Resume text: {resume_text[:50]}...")
+        print(f"[CREATE_SUPERVISOR] Resume vector: {resume_vector}")
         return {
             "text": resume_text,
             "vector": resume_vector,
@@ -132,12 +134,28 @@ async def get_resume_data(
     else:
         # Fetch resume from database
         print(f"[CREATE_SUPERVISOR] Fetching resume for user: {user_id}")
-        resume_data = await get_user_resume(
-            index=pinecone_client.Index("resumes"),
-            user_id=user_id
-        )
-        print(f"[CREATE_SUPERVISOR] Resume data retrieved")
-        return resume_data
+        try:
+            resume_data = await get_user_resume(
+                index=pinecone_client.Index("resumes"),
+                user_id=user_id
+            )
+            print(f"[CREATE_SUPERVISOR] Resume data retrieved")
+            return resume_data
+        except ValueError as e:
+            # User doesn't have a resume uploaded, create a default response
+            print(f"[CREATE_SUPERVISOR] No resume found for user: {user_id}")
+            # Create a default embedding (zero vector)
+            default_text = "No resume available. Please upload a resume to get personalized assistance."
+            default_embeddings = [0] * text_embedder.dim
+
+            return {
+                "text": default_text,
+                "vector": default_embeddings,
+                "source": "default",
+                "file_id": None,
+                "filename": None,
+                "keywords": []
+            }
 
 
 def convert_conversation_history(conversation_history: Optional[List[Dict[str, Any]]]) -> List[Message]:

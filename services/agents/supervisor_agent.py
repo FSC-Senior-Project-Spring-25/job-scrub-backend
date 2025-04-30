@@ -84,6 +84,7 @@ class SupervisorAgent:
 
     async def process_message(
             self,
+            user_id: str,
             message: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
@@ -244,7 +245,8 @@ class SupervisorAgent:
         active_agents = state.active_agents
         agent_results: Dict[str, AgentResponse] = {}
         resume_text = state.resume_text
-
+        print("Executing agents with active agents:", active_agents)
+        print("Current message:", state.current_message)
         async def run_user_profile():
             return await self.user_profile_agent.invoke(
                 resume_text=resume_text,

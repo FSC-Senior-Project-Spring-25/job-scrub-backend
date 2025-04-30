@@ -1,20 +1,22 @@
 import json
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Form, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from dependencies import LLM, Parser, CurrentUser, PineconeClient
+from services.agents.supervisor_agent import SupervisorAgent
 from services.agents.tools.create_supervisor_agent import create_supervisor_agent
 
 router = APIRouter()
 
 
-async def generate_stream_response(supervisor, message):
+async def generate_stream_response(supervisor: SupervisorAgent, user_id: str, message: str):
     """Generate a streaming response from the supervisor agent"""
     try:
-        async for chunk in supervisor.process_message(message=message, ):
+        async for chunk in supervisor.process_message(user_id=user_id, message=message):
+            print(f"[CHAT] Streaming chunk: {chunk}")
             yield f"data: {json.dumps(chunk)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
@@ -28,7 +30,7 @@ async def chat(
         llm: LLM,
         pinecone: PineconeClient,
         message: str = Form(...),
-        resume_file: Optional[UploadFile] = File(None),
+        resume: Optional[UploadFile] = File(None),
         conversation_history: str = Form("[]"),
 ):
     """
@@ -37,7 +39,7 @@ async def chat(
     try:
         print(f"[CHAT] Processing message: {message[:50]}...")
         print(f"[CHAT] User: {current_user.user_id}")
-        print(f"[CHAT] Resume file: {resume_file.filename if resume_file else 'None'}")
+        print(f"[CHAT] Resume file: {resume.filename if resume else 'None'}")
 
         # Parse conversation history
         history = json.loads(conversation_history)
@@ -49,7 +51,7 @@ async def chat(
             pinecone_client=pinecone,
             llm=llm,
             conversation_history=history,
-            resume_file=resume_file,
+            resume_file=resume,
             resume_parser=parser
         )
 
@@ -57,6 +59,7 @@ async def chat(
         return StreamingResponse(
             generate_stream_response(
                 supervisor=supervisor,
+                user_id=current_user.user_id,
                 message=message,
             ),
             media_type="text/event-stream"

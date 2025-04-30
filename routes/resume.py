@@ -138,6 +138,7 @@ async def view_resume(
 @router.delete("/delete")
 async def delete_resume(
         s3_service: S3,
+        pc: PineconeClient,
         key: str,
         current_user: CurrentUser,
 ):
@@ -147,11 +148,28 @@ async def delete_resume(
     if not key.startswith(f"resumes/{user_id}/"):
         raise HTTPException(status_code=403, detail="Not authorized to delete this file")
 
-    if await s3_service.delete_file(key):
-        return JSONResponse(content={"success": True})
+    try:
+        # Delete file from S3
+        s3_deleted = await s3_service.delete_file(key)
 
-    # Must have failed to delete
-    raise HTTPException(status_code=500, detail="Failed to delete file")
+        # Delete vector from Pinecone
+        resume_index = pc.Index("resumes")
+        resume_index.delete(ids=[user_id], namespace="resumes")
+
+        if not s3_deleted:
+            # If S3 deletion failed but Pinecone succeeded, return partial success
+            return JSONResponse(
+                status_code=207,
+                content={
+                    "success": False,
+                    "message": "File deleted from Pinecone but failed to delete from storage"
+                }
+            )
+
+        return JSONResponse(content={"success": True, "message": "Resume deleted successfully"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete resume: {str(e)}")
 
 
 @router.get("/keywords")
