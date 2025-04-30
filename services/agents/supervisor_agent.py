@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Flag
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, AsyncGenerator
 
 from dotenv import load_dotenv
 from langgraph.graph import StateGraph, START, END
@@ -65,7 +65,9 @@ class SupervisorAgent:
             resume_enhancer: ResumeEnhancementAgent,
             user_profile_agent: UserProfileAgent,
             job_search_agent: JobSearchAgent,
-            user_search_agent: UserSearchAgent
+            user_search_agent: UserSearchAgent,
+            resume_data: Optional[Dict[str, Any]] = None,
+            processed_conversation_history: Optional[List[Message]] = None
     ):
         self.llm = llm
         self.pc = pc
@@ -74,6 +76,8 @@ class SupervisorAgent:
         self.user_profile_agent = user_profile_agent
         self.job_search_agent = job_search_agent
         self.user_search_agent = user_search_agent
+        self.resume_text = resume_data.get("text", "") if resume_data else ""
+        self.processed_history = processed_conversation_history or []
         self.workflow = self._create_workflow()
 
     async def process_message(
@@ -82,53 +86,110 @@ class SupervisorAgent:
             message: str,
             conversation_history: List[Dict[str, Any]],
             files: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
-        # Convert conversation history to Message objects
-        history = [
-            Message(
-                role=item["role"],
-                content=item["content"],
-                timestamp=item["timestamp"],
-                metadata=item.get("metadata", {})
-            )
-            for item in conversation_history
-        ]
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Process a message with streaming response
 
-        # Pre-fetch the user's resume text
-        resume_data = await get_user_resume(index=self.pc.Index("resumes"), user_id=user_id)
-        resume_text = resume_data.get("text", "")
-        print("Resume Data:", resume_data)
-        # Initialize workflow state
-        initial_state = SupervisorState(
+        Args:
+            user_id: The user's ID
+            message: The user's message
+            conversation_history: Previous conversation (will use processed history)
+            files: Any uploaded files
+
+        Yields:
+            Chunks of the response as they're generated
+        """
+
+        # Initialize state
+        state = SupervisorState(
             user_id=user_id,
             current_message=message,
-            resume_text=resume_text,
-            conversation_history=history,
+            resume_text=self.resume_text,
+            conversation_history=self.processed_history,
             files=files,
             active_agents=AgentFlags.NONE,
             agent_results={},
             final_response=None,
             error=None
         )
-        print(f"Processing message: {message} for user: {user_id}")
-        try:
-            result = await self.workflow.ainvoke(initial_state)
-            new_history = result["conversation_history"]
-            updated_history = [
-                {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp, "metadata": msg.metadata}
-                for msg in new_history
-            ]
 
-            print("Final Response:", result["final_response"])
-            return {
-                "response": result["final_response"],
-                "conversation": updated_history,
-                "active_agents": result["active_agents"].name if result.get("active_agents") else None,
-                "error": result.get("error")
+        print(f"Processing message: {message} for user: {user_id}")
+
+        try:
+            # 1. Analyze message to determine agents
+            routing_result = await self._analyze_message(state)
+            active_agents = routing_result["active_agents"]
+            state.active_agents = active_agents
+
+            # Yield the agent selection information
+            yield {
+                "type": "agents_selected",
+                "agents": [f.name.lower() for f in AgentFlags if f in active_agents and f != AgentFlags.NONE]
+            }
+
+            # 2. Execute agents to get results
+            execution_result = await self._execute_agents(state)
+            state.agent_results = execution_result["agent_results"]
+
+            # 3. Generate a response - stream when possible
+            accumulated_response = []
+
+            # Special handling for chat-only responses
+            if active_agents == AgentFlags.CHAT and "chat" in state.agent_results:
+                chat_result = state.agent_results["chat"]
+                # If there was an error, yield the error
+                if isinstance(chat_result, dict) and "error" in chat_result:
+                    error_msg = f"I'm sorry, I encountered an error: {chat_result['error']}"
+                    yield {
+                        "type": "content_chunk",
+                        "content": error_msg
+                    }
+                    accumulated_response.append(error_msg)
+                else:
+                    # Chat result is now a string in chat_result.answer - no streaming needed
+                    response_text = chat_result.answer
+                    yield {
+                        "type": "content_chunk",
+                        "content": response_text
+                    }
+                    accumulated_response.append(response_text)
+            else:
+                # For multiple agents or non-chat agents, stream the synthesis
+                async for chunk in self._stream_synthesize_response(state):
+                    if chunk:
+                        yield {
+                            "type": "content_chunk",
+                            "content": chunk
+                        }
+                        accumulated_response.append(chunk)
+
+            # Combine accumulated response chunks
+            final_response = "".join(accumulated_response)
+            state.final_response = final_response
+
+            # 4. Update the conversation history
+            result = await self._update_conversation(state)
+            updated_history = result["conversation_history"]
+
+            # 5. Yield the complete response with conversation history
+            yield {
+                "type": "complete",
+                "response": final_response,
+                "conversation": [
+                    {"role": msg.role, "content": msg.content, "timestamp": msg.timestamp, "metadata": msg.metadata}
+                    for msg in updated_history
+                ],
+                "active_agents": active_agents.name if active_agents else None
             }
 
         except Exception as e:
-            return {"response": None, "conversation": conversation_history, "active_agents": None, "error": str(e)}
+            print(f"Error in process_message: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            yield {
+                "type": "error",
+                "error": str(e)
+            }
 
     async def _analyze_message(self, state: SupervisorState) -> Dict[str, Any]:
         """Determine which agents to run based on the user message using LLM analysis"""
@@ -233,7 +294,7 @@ class SupervisorAgent:
             AgentFlags.USER_SEARCH: ("user_search", run_user_search),
         }
 
-        # Build task list - call the functions here to create coroutines
+        # Build task list
         tasks = [(key, func()) for key, func in
                  [agent_functions[flag] for flag in agent_functions if flag in active_agents]]
 
@@ -249,15 +310,15 @@ class SupervisorAgent:
 
         return {"agent_results": agent_results}
 
-    async def _synthesize_response(self, state: SupervisorState) -> Dict[str, Any]:
+    async def _stream_synthesize_response(self, state: SupervisorState) -> AsyncGenerator[str, None]:
         """
-        Synthesize the results from multiple agents into a coherent response focused on the user's query
+        Stream the synthesis of multiple agent results
 
         Args:
             state: Current supervisor state with agent results
 
-        Returns:
-            Updated state with final focused response
+        Yields:
+            Chunks of the synthesized response
         """
         active_agents = state.active_agents
         agent_results = state.agent_results
@@ -265,27 +326,28 @@ class SupervisorAgent:
 
         # If there was an error and no agent results, return the error
         if state.error and not agent_results:
-            return {"final_response": f"I'm sorry, I encountered an error: {state.error}"}
+            yield f"I'm sorry, I encountered an error: {state.error}"
+            return
 
-        # If only the chat agent was used, return its response directly
-        if active_agents == AgentFlags.CHAT and "chat" in agent_results:
-            chat_result = agent_results["chat"]
-            if "error" in chat_result:
-                return {"final_response": f"I'm sorry, I encountered an error: {chat_result['error']}"}
-            return {"final_response": chat_result["response"]}
-
-        print("Agent results:", agent_results)
         # Convert AgentResponse objects to dictionaries for JSON serialization
-        serialized_results = {
-            key: response.model_dump_json() for key, response in agent_results.items()
-        }
+        try:
+            serialized_results = {}
+            for key, response in agent_results.items():
+                if hasattr(response, "model_dump_json"):
+                    serialized_results[key] = response.model_dump_json()
+                elif hasattr(response, "dict"):
+                    serialized_results[key] = json.dumps(response.dict())
+                else:
+                    serialized_results[key] = json.dumps(response)
+        except Exception as e:
+            serialized_results = {"error": f"Error serializing results: {str(e)}"}
 
         synthesis_prompt = f"""
         Synthesize the following agent results into a well-formatted markdown response that directly addresses the user's query:
 
         USER QUERY:
         {user_query}
-        
+
         RESULTS:
         {json.dumps(serialized_results, indent=2)}
 
@@ -302,19 +364,14 @@ class SupervisorAgent:
         Important: The response should be well-structured, focused only on answering what the user asked,
         and appear as if it came from a single intelligent assistant.
         """
-        # Generate synthesized response
-        response = await self.llm.agenerate(
-            system_prompt="You are an expert resume consultant that provides focused, relevant answers to user questions.",
-            user_message=synthesis_prompt
-        )
 
-        if not response.success:
-            # Fallback to a simple response
-            final_response = "I'm sorry, I couldn't properly synthesize the results for your specific question."
-        else:
-            final_response = response.content
-
-        return {"final_response": final_response}
+        # Stream the synthesized response
+        async for chunk in self.llm.generate_stream(
+                system_prompt="You are an expert resume consultant that provides focused, relevant answers to user questions.",
+                user_message=synthesis_prompt
+        ):
+            if chunk:
+                yield chunk
 
     async def _update_conversation(self, state: SupervisorState) -> Dict[str, Any]:
         ts = datetime.now().isoformat()
@@ -328,12 +385,10 @@ class SupervisorAgent:
         builder = StateGraph(SupervisorState)
         builder.add_node("analyze_message", self._analyze_message)
         builder.add_node("execute_agents", self._execute_agents)
-        builder.add_node("synthesize_response", self._synthesize_response)
         builder.add_node("update_conversation", self._update_conversation)
         builder.add_edge(START, "analyze_message")
         builder.add_edge("analyze_message", "execute_agents")
-        builder.add_edge("execute_agents", "synthesize_response")
-        builder.add_edge("synthesize_response", "update_conversation")
+        builder.add_edge("execute_agents", "update_conversation")
         builder.add_edge("update_conversation", END)
         return builder.compile()
 
@@ -364,7 +419,14 @@ if __name__ == "__main__":
             "metadata": {}
         }
     ]
-    files = None  # Replace with actual file data if needed
-    message = "Search for users with Python skills"
-    response = asyncio.run(supervisor.process_message(user_id, message, conversation_history, files))
-    print(response)
+
+
+    # For testing the streaming functionality
+    async def test_streaming():
+        message = "Search for users with Python skills"
+        async for chunk in supervisor.process_message(user_id, message, conversation_history, None):
+            print(f"Received chunk: {chunk}")
+
+
+    # Run the test
+    asyncio.run(test_streaming())
