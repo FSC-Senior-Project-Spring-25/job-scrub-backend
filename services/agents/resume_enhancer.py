@@ -16,7 +16,6 @@ class EnhancementState(MessagesState):
     The agent state for resume enhancement.
     It holds the resume text and conversation messages.
     """
-    resume_text: str
     prompt: str
     job_description: Optional[str]
     formatting_issues: Optional[List[Dict[str, Any]]]
@@ -38,13 +37,18 @@ class ResumeEnhancementAgent(ReActAgent):
         "improvement_suggestions"
     ]
 
-    def __init__(self, llm: GeminiLLM = GeminiLLM()):
+    def __init__(
+            self,
+            resume_text: str,
+            llm: GeminiLLM = GeminiLLM(),
+    ):
         """
         Initializes the ResumeEnhancementAgent.
 
         Args:
             llm: An instance of GeminiLLM.
         """
+        self.resume_text = resume_text
         super().__init__(llm)
 
     def _get_system_prompt(self) -> str:
@@ -59,12 +63,11 @@ class ResumeEnhancementAgent(ReActAgent):
             "You can call the suggestions_tool directly without requiring prior analysis if appropriate."
         )
 
-    async def invoke(self, resume_text: str, prompt: str, job_description: Optional[str] = None) -> AgentResponse:
+    async def invoke(self, prompt: str, job_description: Optional[str] = None) -> AgentResponse:
         """
         Main entry point for agent execution, implementing the abstract method.
 
         Args:
-            resume_text: The resume text to analyze
             prompt: The prompt to guide the analysis
             job_description: Optional job description for ATS analysis
 
@@ -74,7 +77,6 @@ class ResumeEnhancementAgent(ReActAgent):
         try:
             # Initialize state
             initial_state = {
-                "resume_text": resume_text,
                 "prompt": prompt,
                 "job_description": job_description,
                 "messages": [
@@ -154,12 +156,9 @@ class ResumeEnhancementAgent(ReActAgent):
 
     def _create_analyze_formatting_tool(self):
         @tool(parse_docstring=True)
-        def analyze_formatting_tool(resume_text: Optional[str] = None) -> Dict[str, Any]:
+        def analyze_formatting_tool() -> Dict[str, Any]:
             """
             Analyze the resume for formatting issues.
-
-            Args:
-                resume_text: The complete resume text provided as input
 
             Returns:
                 A dictionary containing formatting issues and messages.
@@ -180,7 +179,7 @@ class ResumeEnhancementAgent(ReActAgent):
                 "  ]\n"
                 "}"
             )
-            user_message = f"Resume text to analyze:\n{resume_text}"
+            user_message = f"Resume text to analyze:\n{self.resume_text}"
 
             response = self.llm.generate(
                 system_prompt=system_prompt,
@@ -198,13 +197,12 @@ class ResumeEnhancementAgent(ReActAgent):
 
     def _create_ats_analysis_tool(self):
         @tool(parse_docstring=True)
-        def ats_analysis_tool(resume_text: Optional[str] = None, job_description: Optional[str] = None) -> Dict[
+        def ats_analysis_tool(job_description: Optional[str] = None) -> Dict[
             str, Any]:
             """
             Analyze the resume for ATS compatibility and keyword optimization.
 
             Args:
-                resume_text: The complete resume text provided as input
                 job_description: Optional job description to analyze keywords against
 
             Returns:
@@ -233,7 +231,7 @@ class ResumeEnhancementAgent(ReActAgent):
                 "}"
             )
 
-            user_message = f"Resume text to analyze:\n{resume_text}"
+            user_message = f"Resume text to analyze:\n{self.resume_text}"
             if job_description:
                 user_message += f"\n\nJob description to match against:\n{job_description}"
             else:
@@ -255,12 +253,9 @@ class ResumeEnhancementAgent(ReActAgent):
 
     def _create_content_quality_tool(self):
         @tool(parse_docstring=True)
-        def content_quality_tool(resume_text: Optional[str] = None) -> Dict[str, Any]:
+        def content_quality_tool() -> Dict[str, Any]:
             """
             Analyze the resume content quality including impact statements, clarity, and professionalism.
-
-            Args:
-                resume_text: The complete resume text provided as input
 
             Returns:
                 A dictionary containing content quality assessment.
@@ -291,7 +286,7 @@ class ResumeEnhancementAgent(ReActAgent):
                 "  }\n"
                 "}"
             )
-            user_message = f"Resume text to analyze:\n{resume_text}"
+            user_message = f"Resume text to analyze:\n{self.resume_text}"
 
             response = self.llm.generate(
                 system_prompt=system_prompt,
@@ -310,7 +305,6 @@ class ResumeEnhancementAgent(ReActAgent):
     def _create_suggestions_tool(self):
         @tool(parse_docstring=True)
         def suggestions_tool(
-                resume_text: Optional[str] = None,
                 formatting_issues: Optional[List[Dict[str, Any]]] = None,
                 ats_analysis: Optional[Dict[str, Any]] = None,
                 content_quality: Optional[Dict[str, Any]] = None
@@ -320,7 +314,6 @@ class ResumeEnhancementAgent(ReActAgent):
             This tool can be called directly without requiring previous analysis.
 
             Args:
-                resume_text: The complete resume text provided as input
                 formatting_issues: Previously identified formatting issues (optional)
                 ats_analysis: Results from ATS analysis (optional)
                 content_quality: Content quality assessment (optional)
@@ -356,7 +349,7 @@ class ResumeEnhancementAgent(ReActAgent):
             if content_quality:
                 analysis_summary["content_quality"] = content_quality
 
-            user_message = f"Resume text:\n{resume_text}\n\n"
+            user_message = f"Resume text:\n{self.resume_text}\n\n"
 
             if analysis_summary:
                 user_message += f"Analysis results:\n{json.dumps(analysis_summary, indent=2)}\n\n"
@@ -385,7 +378,6 @@ class ResumeEnhancementAgent(ReActAgent):
         based on the user's request, not necessarily in sequence.
         Extends the think method from ReActAgent.
         """
-        resume_text = state.get("resume_text", "")
         prompt = state.get("prompt", "")
         job_description = state.get("job_description", "")
 
@@ -425,7 +417,7 @@ class ResumeEnhancementAgent(ReActAgent):
             messages.append(
                 HumanMessage(
                     content=(
-                        f"Here is a candidate's resume:\n{resume_text}\n\n"
+                        f"Here is a candidate's resume:\n{self.resume_text}\n\n"
                         f"Job description (if provided): {job_description}\n\n"
                         "Based on the user's request, choose the appropriate tool(s) to execute. "
                         "You don't need to run all tools - only what's directly relevant to the request."

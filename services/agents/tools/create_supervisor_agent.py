@@ -188,8 +188,14 @@ def create_agent_instances(
             text_embedder=text_embedder,
             llm=llm
         ),
-        "resume_enhancer": ResumeEnhancementAgent(llm=llm),
-        "user_profile": UserProfileAgent(llm=llm),
+        "resume_enhancer": ResumeEnhancementAgent(
+            resume_text=resume_data.get("text"),
+            llm=llm
+        ),
+        "user_profile": UserProfileAgent(
+            resume_text=resume_data.get("text"),
+            llm=llm
+        ),
         "job_search": JobSearchAgent(
             llm=llm,
             job_index=pinecone_client.Index("job-postings"),

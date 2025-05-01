@@ -249,7 +249,6 @@ class SupervisorAgent:
         print("Current message:", state.current_message)
         async def run_user_profile():
             return await self.user_profile_agent.invoke(
-                resume_text=resume_text,
                 prompt=state.current_message
             )
 
@@ -261,7 +260,6 @@ class SupervisorAgent:
 
         async def run_enhancer():
             return await self.resume_enhancer.invoke(
-                resume_text=resume_text,
                 prompt=state.current_message
             )
 

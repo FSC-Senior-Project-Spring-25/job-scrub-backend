@@ -19,7 +19,6 @@ class ProfileAgentState(MessagesState):
     The agent state for user profile analysis.
     Holds the user_id, prompt, resume text, and conversation messages.
     """
-    resume_text: Optional[str]
     prompt: Optional[str]
     profile_info: Optional[Dict[str, Any]]
 
@@ -30,13 +29,18 @@ class UserProfileAgent(ReActAgent):
     # List of metadata fields to track
     METADATA_FIELDS = ["profile_info"]
 
-    def __init__(self, llm: GeminiLLM = GeminiLLM()):
+    def __init__(
+            self,
+            resume_text: str,
+            llm: GeminiLLM = GeminiLLM()
+    ):
         """
         Initialize the user profile agent with ReAct capabilities
 
         Args:
             llm: LLM service for profile analysis
         """
+        self.resume_text = resume_text
         super().__init__(llm)
 
     def _get_system_prompt(self) -> str:
@@ -51,13 +55,12 @@ class UserProfileAgent(ReActAgent):
             "2. Answer the user's question or provide a profile summary using profile information\n\n"
         )
 
-    async def invoke(self, resume_text:str, prompt: str) -> AgentResponse:
+    async def invoke(self, prompt: str) -> AgentResponse:
         """
         Process a query about a resume
         Implements abstract method from Agent base class.
 
         Args:
-            resume_text: The resume text to analyze
             prompt: The question or prompt to answer related to the resume
 
         Returns:
@@ -66,7 +69,6 @@ class UserProfileAgent(ReActAgent):
         try:
             # Initialize state
             initial_state = {
-                "resume_text": resume_text,
                 "prompt": prompt,
                 "messages": [
                     {"role": "user", "content": f"Analyze this resume and answer: {prompt}"}
@@ -142,12 +144,11 @@ class UserProfileAgent(ReActAgent):
 
     def _create_extract_profile_tool(self):
         @tool(parse_docstring=True)
-        async def extract_profile_tool(resume_text: str, keywords: Optional[List[str]] = None) -> Dict[str, Any]:
+        async def extract_profile_tool(keywords: Optional[List[str]] = None) -> Dict[str, Any]:
             """
             Extract structured profile information from resume text.
 
             Args:
-                resume_text: The complete resume text
                 keywords: Optional list of keywords extracted from the resume
 
             Returns:
@@ -168,7 +169,7 @@ class UserProfileAgent(ReActAgent):
             9. Certifications and qualifications
 
             Resume text:
-            {resume_text}
+            {self.resume_text}
 
             Resume keywords: {", ".join(keywords) if keywords else "No keywords available"}
 
@@ -232,7 +233,6 @@ class UserProfileAgent(ReActAgent):
         Assistant node that evaluates the current state and executes the next required tool.
         Extends the think method from ReActAgent.
         """
-        resume_text = state.get("resume_text", "")
         prompt = state.get("prompt", "")
 
         # Create a new state dictionary, preserving all existing fields
@@ -261,7 +261,7 @@ class UserProfileAgent(ReActAgent):
             messages.append(
                 HumanMessage(
                     content=(
-                        f"Here is a candidate's resume:\n{resume_text}\n\n"
+                        f"Here is a candidate's resume:\n{self.resume_text}\n\n"
                         f"Please answer: {prompt}\n\n"
                         "You should extract structured profile information first using extract_profile_tool."
                     )
