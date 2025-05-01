@@ -36,7 +36,7 @@ async def calculate_resume_similarity(
         # Process using the matching agent
         result = await matching_agent.invoke(file_bytes, job_description)
 
-        return result
+        return result.answer
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
