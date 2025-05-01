@@ -101,67 +101,58 @@ class UserSearchAgent(ReActAgent):
 
             Args:
                 top_k: Number of results to return (default: 5)
-                keywords: List of keywords that should appear in the user's resume
-                text_contains: Text that should be contained in the resume
+                keywords: List of keywords; matches any resume containing at least one keyword
+                text_contains: Text that must appear somewhere in the resume (post-filtered)
 
             Returns:
                 JSON string with users list and count
             """
-            # Build metadata filter
+            # Build a more tolerant metadata filter
             metadata_filter: Dict[str, Any] = {}
-
-            # Handle keywords filtering - each keyword must be present
             if keywords:
-                keyword_conditions = [{"keywords": keyword} for keyword in keywords]
-                if len(keyword_conditions) == 1:
-                    metadata_filter.update(keyword_conditions[0])
-                else:
-                    metadata_filter["$and"] = metadata_filter.get("$and", []) + keyword_conditions
+                # match any resume whose `keywords` metadata array contains at least one of the requested keywords
+                metadata_filter["keywords"] = {"$in": keywords}
 
-            # Text content filtering would be handled through post-processing
-            print("Metadata filter:", metadata_filter)
-
-            try:
-                # Execute query with filters
-                response = self.resume_index.query(
+            # First attempt: vector + metadata filter
+            def _run_query(filter_expr):
+                return self.resume_index.query(
                     vector=self.resume_vector,
                     top_k=top_k,
                     namespace="resumes",
-                    filter=metadata_filter if metadata_filter else None,
+                    filter=filter_expr,
                     include_metadata=True
                 )
 
-                # Post-process results for text_contains filter that Pinecone doesn't handle directly
-                users = []
-                for match in response.matches:
-                    # Extract user data
-                    user_data = {
-                        "user_id": match.id,
-                        "score": match.score
-                    }
+            # try with filter, but if no matches come back, drop the filter entirely
+            response = _run_query(metadata_filter if metadata_filter else None)
+            if not response.matches and metadata_filter:
+                # fallback to pure vector search
+                response = _run_query(None)
 
-                    # Add all relevant metadata
-                    if match.metadata:
-                        # Filter out sensitive or large fields if needed
-                        user_data["keywords"] = match.metadata.get("keywords", [])
-                        user_data["file_id"] = match.metadata.get("file_id", "")
+            print(f"Search results: {response.matches}")
+            users = []
+            for match in response.matches:
+                user_data = {
+                    "user_id": match.id,
+                    "score": match.score,
+                    "keywords": match.metadata.get("keywords", []),
+                    "file_id": match.metadata.get("file_id", ""),
+                }
 
-                        # Only include a summary of text, not the full content
-                        full_text = match.metadata.get("text", "")
-                        user_data["text_summary"] = full_text[:200] + "..." if len(full_text) > 200 else full_text
+                # summarize the text field if present
+                full_text = match.metadata.get("text", "")
+                user_data["text_summary"] = (
+                    full_text[:200] + "..." if len(full_text) > 200 else full_text
+                )
 
-                    # Apply post-filtering for text content
-                    include_user = True
-                    if text_contains and match.metadata and "text" in match.metadata:
-                        if text_contains.lower() not in match.metadata["text"].lower():
-                            include_user = False
+                # post-filter for text_contains
+                if text_contains:
+                    if text_contains.lower() not in full_text.lower():
+                        continue
 
-                    if include_user:
-                        users.append(user_data)
+                users.append(user_data)
 
-                return json.dumps({"users": users, "count": len(users)})
-            except Exception as e:
-                return json.dumps({"error": str(e), "users": [], "count": 0})
+            return json.dumps({"users": users, "count": len(users)})
 
         return [search_users]
 
