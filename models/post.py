@@ -16,4 +16,5 @@ class LikeRequest(BaseModel):
 
 
 class CommentRequest(BaseModel):
+    author: str
     text: str

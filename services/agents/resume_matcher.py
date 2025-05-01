@@ -3,6 +3,7 @@ import torch
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 
+from services.agents.base.agent import AgentResponse, Agent
 from services.agents.tools.extract_keywords import extract_keywords
 from services.gemini import GeminiLLM
 from services.resume_parser import ResumeParser
@@ -21,19 +22,13 @@ class MatchingState(TypedDict):
     resume_bytes: bytes
 
 
-class ResumeMatchingAgent:
-    def __init__(
-            self,
-            resume_parser: ResumeParser,
-            text_embedder: TextEmbedder,
-            llm: GeminiLLM
-    ):
+class ResumeMatchingAgent(Agent):
+    def __init__(self, resume_parser: ResumeParser, text_embedder: TextEmbedder, llm: GeminiLLM = GeminiLLM()):
         self.resume_parser = resume_parser
         self.text_embedder = text_embedder
-        self.llm = llm
-        self.workflow = self._create_workflow()
+        super().__init__(llm)
 
-    async def analyze_resume(self, resume_bytes: bytes, job_description: str) -> dict:
+    async def invoke(self, resume_bytes: bytes, job_description: str) -> AgentResponse:
         """Analyze resume from PDF bytes"""
         initial_state = MatchingState(
             resume_text="",
@@ -48,9 +43,9 @@ class ResumeMatchingAgent:
         )
 
         result = await self.workflow.ainvoke(initial_state)
-        return self._format_result(result)
+        return self._format_response(result)
 
-    async def analyze_resume_text(self, resume_text: str, job_description: str) -> dict:
+    async def analyze_resume_text(self, resume_text: str, job_description: str) -> AgentResponse:
         """Analyze resume from text directly"""
         # Create a temporary workflow for text-only processing
         builder = StateGraph(MatchingState)
@@ -74,9 +69,29 @@ class ResumeMatchingAgent:
         )
 
         result = await text_workflow.ainvoke(initial_state)
-        return self._format_result(result)
+        return self._format_response(result)
 
-    def _format_result(self, result: MatchingState) -> dict:
+    def _create_workflow(self) -> CompiledStateGraph:
+        """Create workflow for resume matching from PDF bytes"""
+        builder = StateGraph(MatchingState)
+
+        # Add nodes
+        builder.add_node("parse_resume", self._parse_resume)
+        builder.add_node("extract_keywords", self._extract_keywords)
+        builder.add_node("compute_match_score", self._compute_match_score)
+
+        # Define flow
+        builder.add_edge(START, "parse_resume")
+        builder.add_edge("parse_resume", "extract_keywords")
+        builder.add_edge("extract_keywords", "compute_match_score")
+        builder.add_edge("compute_match_score", END)
+
+        workflow = builder.compile()
+        print(workflow.get_graph().draw_ascii())
+
+        return workflow
+
+    def _extract_answer(self, result: MatchingState) -> dict:
         """Format the final result dictionary"""
         return {
             "match_score": result["match_score"],
@@ -153,23 +168,3 @@ class ResumeMatchingAgent:
             "keyword_coverage": keyword_coverage,
             "similarity_details": keyword_matches
         }
-
-    def _create_workflow(self) -> CompiledStateGraph:
-        """Create workflow for resume matching from PDF bytes"""
-        builder = StateGraph(MatchingState)
-
-        # Add nodes
-        builder.add_node("parse_resume", self._parse_resume)
-        builder.add_node("extract_keywords", self._extract_keywords)
-        builder.add_node("compute_match_score", self._compute_match_score)
-
-        # Define flow
-        builder.add_edge(START, "parse_resume")
-        builder.add_edge("parse_resume", "extract_keywords")
-        builder.add_edge("extract_keywords", "compute_match_score")
-        builder.add_edge("compute_match_score", END)
-
-        workflow = builder.compile()
-        print(workflow.get_graph().draw_ascii())
-
-        return workflow

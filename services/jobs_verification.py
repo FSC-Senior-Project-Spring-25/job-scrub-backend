@@ -13,6 +13,103 @@ class JobsVerificationService:
         self.session = session
         self.index = index
         self.embedder = embedder
+# method for getting all jobs
+    async def get_all_jobs(self, limit=100) -> list[dict]:
+        """
+        Get all jobs from the Pinecone index 
+        
+        Args:
+            limit: The maximum number of jobs to return
+            
+        Returns:
+            A list of all job postings
+        """
+        try:
+            dummy_vector = [0.0] * self.embedder.dim
+
+            response = self.index.query(
+                namespace="jobs",
+                vector=dummy_vector,
+                filter={} , # empty filter to get all jobs
+                top_k=limit,
+                include_metadata=True
+            )
+
+            # Format the results
+            all_jobs = []
+            for match in response.matches:
+                all_jobs.append({
+                    "id": match.id,
+                    "metadata": match.metadata,
+                })
+
+            return all_jobs
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_jobs(self, job_ids: list[str]) -> dict:
+        """
+        Get multiple jobs from the Pinecone index using their IDs
+
+        Args:
+            job_ids: List of job IDs to retrieve
+
+        Returns:
+            Dictionary of job IDs mapped to their job data
+        """
+        try:
+            response = self.index.fetch(ids=job_ids, namespace="jobs")
+            jobs = {}
+
+            for job_id, vector in response.vectors.items():
+                jobs[job_id] = {
+                    "id": vector.id,
+                    "metadata": vector.metadata,
+                }
+
+            return jobs
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_all_jobs(self, limit=1000) -> list[dict]:
+        """
+        Get all jobs from the Pinecone index
+
+        Args:
+            limit: The maximum number of jobs to return
+
+        Returns:
+            A list of all job postings
+        """
+        try:
+            # Pinecone's list() returns IDs directly as a generator
+            job_ids = []
+            for id_batch in self.index.list(namespace="jobs"):
+                job_ids.extend(id_batch)
+                if len(job_ids) >= limit:
+                    job_ids = job_ids[:limit]
+                    break
+
+            if not job_ids:
+                return []
+
+            # Fetch the jobs in batches
+            jobs = {}
+            batch_size = 100
+
+            for i in range(0, len(job_ids), batch_size):
+                batch_ids = job_ids[i:i + batch_size]
+                response = self.index.fetch(ids=batch_ids, namespace="jobs")
+
+                for job_id, vector in response.vectors.items():
+                    jobs[job_id] = {
+                        "id": vector.id,
+                        "metadata": vector.metadata,
+                    }
+
+            return list(jobs.values())
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     async def get_unverified_jobs(self, limit=100) -> list[dict]:
         """
