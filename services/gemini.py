@@ -2,6 +2,8 @@ from enum import Enum
 from typing import Optional, Union, Dict, Any, List, AsyncGenerator
 import json
 from dataclasses import dataclass
+
+from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 
@@ -37,6 +39,7 @@ class GeminiLLM:
             temperature: Controls randomness in output (0.0 = deterministic)
             max_retries: Number of retry attempts for failed calls
         """
+        load_dotenv()
         self.chat = ChatGoogleGenerativeAI(
             model=model,
             temperature=temperature,

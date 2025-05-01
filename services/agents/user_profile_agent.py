@@ -1,18 +1,18 @@
-import asyncio
-import os
+import json
 from typing import Dict, Any, Optional, List
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
-from pinecone import Pinecone
 
-from services.agents.tools.get_user_resume import get_user_resume
+from services.agents.base.agent import ReActAgent, AgentResponse
 from services.gemini import GeminiLLM, ResponseFormat
 
 load_dotenv()
+
 
 class ProfileAgentState(MessagesState):
     """
@@ -20,44 +20,119 @@ class ProfileAgentState(MessagesState):
     Holds the user_id, prompt, resume text, and conversation messages.
     """
     prompt: Optional[str]
-    resume_text: Optional[str]
+    profile_info: Optional[Dict[str, Any]]
 
 
-class UserProfileAgent:
+class UserProfileAgent(ReActAgent):
     """Agent for retrieving and analyzing user profile information using ReAct pattern"""
 
-    def __init__(self, llm: GeminiLLM):
+    # List of metadata fields to track
+    METADATA_FIELDS = ["profile_info"]
+
+    def __init__(
+            self,
+            resume_text: str,
+            llm: GeminiLLM = GeminiLLM()
+    ):
         """
         Initialize the user profile agent with ReAct capabilities
 
         Args:
             llm: LLM service for profile analysis
         """
-        self.llm = llm
+        self.resume_text = resume_text
+        super().__init__(llm)
 
-        # Create the tools
-        self.tools = self._create_tools()
+    def _get_system_prompt(self) -> str:
+        """
+        Return the system prompt for this agent.
+        Implements abstract method from ReActAgent.
+        """
+        return (
+            "You are a user profile analysis assistant that helps analyze resume data "
+            "and answer questions about user profiles. Follow this process:\n"
+            "1. Extract structured profile information using extract_profile_tool\n"
+            "2. Answer the user's question or provide a profile summary using profile information\n\n"
+        )
 
-        # Bind the tools to the LLM
-        self.llm_with_tools = self.llm.chat.bind_tools(self.tools)
+    async def invoke(self, prompt: str) -> AgentResponse:
+        """
+        Process a query about a resume
+        Implements abstract method from Agent base class.
 
+        Args:
+            prompt: The question or prompt to answer related to the resume
+
+        Returns:
+            Dictionary with the response
+        """
+        try:
+            # Initialize state
+            initial_state = {
+                "prompt": prompt,
+                "messages": [
+                    {"role": "user", "content": f"Analyze this resume and answer: {prompt}"}
+                ],
+            }
+            # Initialize metadata fields
+            for field in self.METADATA_FIELDS:
+                initial_state[field] = None
+
+            result = await self.workflow.ainvoke(initial_state)
+            return self._format_response(result)
+        except Exception as e:
+            return AgentResponse(
+                answer=f"An error occurred during profile analysis: {str(e)}",
+                error=str(e),
+                metadata={"agent_type": "user_profile", "error_type": type(e).__name__}
+            )
+
+    def _extract_answer(self, state: Dict[str, Any]) -> str:
+        """
+        Extract final answer from result.
+        Overrides method from Agent base class.
+        """
+        # Use the parent implementation to extract the answer
+        answer = super()._extract_answer(state)
+        print("Final User Profile Message:", answer)
+        return answer
+
+    def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract metadata from the state.
+        Overrides method from Agent base class.
+
+        Returns:
+            Dictionary with metadata fields
+        """
+        metadata = {"agent_type": "user_profile"}
+        print("Extract Metadata Fields:", state)
+        # Add all tracked fields to metadata
+        for field in self.METADATA_FIELDS:
+            if field in state:
+                metadata[field] = state.get(field)
+
+        print("Extracted Metadata:", metadata)
+        return metadata
+
+    def _create_workflow(self) -> CompiledStateGraph:
+        """
+        Create and return the agent's workflow.
+        Implements abstract method from Agent base class.
+        """
         # Build the ReAct agent state graph
-        self.builder = StateGraph(ProfileAgentState)
-        self.builder.add_node("think", self.think)
-        self.builder.add_node("tools", ToolNode(self.tools))
-        self.builder.add_edge(START, "think")
-        self.builder.add_conditional_edges("think", tools_condition)
-        self.builder.add_edge("tools", "think")
-        self.agent = self.builder.compile()
+        builder = StateGraph(ProfileAgentState)
+        builder.add_node("think", self.think)
+        builder.add_node("tools", ToolNode(self.tools))
+        builder.add_edge(START, "think")
+        builder.add_conditional_edges("think", tools_condition)
+        builder.add_edge("tools", "think")
+        return builder.compile()
 
-        print("==" * 20)
-        print("User Profile Agent Graph:")
-        print("==" * 20)
-        self.agent.get_graph().print_ascii()
-
-    def _create_tools(self):
+    def _create_tools(self) -> List:
         """
         Creates and returns all the tools for the UserProfileAgent.
+        Implements abstract method from ReActAgent.
 
         Returns:
             List of tools for the ReAct agent.
@@ -69,12 +144,11 @@ class UserProfileAgent:
 
     def _create_extract_profile_tool(self):
         @tool(parse_docstring=True)
-        async def extract_profile_tool(resume_text: str, keywords: Optional[List[str]] = None) -> Dict[str, Any]:
+        async def extract_profile_tool(keywords: Optional[List[str]] = None) -> Dict[str, Any]:
             """
             Extract structured profile information from resume text.
 
             Args:
-                resume_text: The complete resume text
                 keywords: Optional list of keywords extracted from the resume
 
             Returns:
@@ -95,7 +169,7 @@ class UserProfileAgent:
             9. Certifications and qualifications
 
             Resume text:
-            {resume_text}
+            {self.resume_text}
 
             Resume keywords: {", ".join(keywords) if keywords else "No keywords available"}
 
@@ -157,81 +231,43 @@ class UserProfileAgent:
     def think(self, state: ProfileAgentState) -> Dict[str, Any]:
         """
         Assistant node that evaluates the current state and executes the next required tool.
+        Extends the think method from ReActAgent.
         """
         prompt = state.get("prompt", "")
-        resume_text = state.get("resume_text", "")
 
-        sys_msg = SystemMessage(
-            content=(
-                "You are a user profile analysis assistant that helps analyze resume data "
-                "and answer questions about user profiles. Follow this process:\n"
-                "1. Then extract structured profile information using extract_profile_tool\n"
-                "2. Finally, answer the user's question or provide a profile summary using profile information\n\n"
-            )
-        )
+        # Create a new state dictionary, preserving all existing fields
+        new_state = dict(state)
 
-        messages: list[BaseMessage] = [sys_msg] + state["messages"]
+        # Transfer all tracked fields from current state to new state
+        messages = state.get("messages", [])
+        if messages:
+            last_message = messages[-1]
+            if hasattr(last_message, 'tool_call_id'):
+                try:
+                    # Try to parse content as JSON if it's a tool response
+                    content = json.loads(last_message.content)
+                    # Update any matching metadata fields from the content
+                    for field in self.METADATA_FIELDS:
+                        if field in content:
+                            new_state[field] = content[field]
+                except (json.JSONDecodeError, AttributeError):
+                    pass
 
-        # For the first message, add a human message that initiates the process
-        if len(state["messages"]) == 1:
+        sys_msg = SystemMessage(content=self._get_system_prompt())
+        messages: list[BaseMessage] = [sys_msg] + state.get("messages", [])
+
+        # For the first message, add instructions
+        if len(state.get("messages", [])) <= 1 and not messages[-1].content.startswith("Here is a candidate's resume"):
             messages.append(
                 HumanMessage(
                     content=(
-                        f"Please answer {prompt}"
-                        f"Given the resume text: {resume_text}, "
+                        f"Here is a candidate's resume:\n{self.resume_text}\n\n"
+                        f"Please answer: {prompt}\n\n"
+                        "You should extract structured profile information first using extract_profile_tool."
                     )
                 )
             )
 
         invocation = self.llm_with_tools.invoke(messages)
-        return {"messages": state["messages"] + [invocation]}
-
-    async def process_user_query(self, resume_text: str, prompt: str) -> Dict[str, Any]:
-        """
-        Process a query about a resume
-
-        Args:
-            resume_text: The resume text to analyze
-            prompt: The question or prompt to answer related to the resume
-
-        Returns:
-            Dictionary with the response
-        """
-        initial_state = {
-            "resume_text": resume_text,
-            "question": prompt,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": f"Analyze this resume and answer: {prompt}"
-                }
-            ]
-        }
-
-        result = await self.agent.ainvoke(initial_state)
-        final_message = result["messages"][-1].content if result["messages"] else ""
-        print("Final User Profile Message:", final_message)
-        return {
-            "answer": final_message,
-            "error": None
-        }
-
-
-if __name__ == "__main__":
-    # Example usage
-    user_id = "oPmOJhSE0VQid56yYyg19hdH5DV2"
-    index = Pinecone(api_key=os.environ["PINECONE_API_KEY"]).Index("resumes")
-    resume_data = asyncio.run(get_user_resume(index, user_id))
-    if not resume_data.get("text"):
-        print("Resume text not found")
-        exit(1)
-
-    # Instantiate GeminiLLM
-    llm = GeminiLLM()
-    user_profile_agent = UserProfileAgent(llm)
-
-    resume_text = resume_data["text"]
-    prompt = "What are the key skills and experience of this candidate?"
-
-    response = asyncio.run(user_profile_agent.process_user_query(resume_text, prompt))
-    print(response)
+        new_state["messages"] = messages + [invocation]
+        return new_state

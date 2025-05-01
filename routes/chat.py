@@ -1,163 +1,77 @@
 import json
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Optional
 
-from fastapi import APIRouter, Form, UploadFile, File, HTTPException
+from fastapi import APIRouter, Form, UploadFile, File
 from fastapi.responses import StreamingResponse
-from starlette.responses import JSONResponse
 
-from dependencies import LLM, Parser, SupervisorAgent, User, CurrentUser
+from dependencies import LLM, Parser, CurrentUser, PineconeClient
+from services.agents.supervisor_agent import SupervisorAgent
+from services.agents.tools.create_supervisor_agent import create_supervisor_agent
 
 router = APIRouter()
 
 
-async def process_files(files: List[UploadFile], parser: Parser) -> List[Dict[str, Any]]:
-    """
-    Process uploaded files and extract content
-
-    Args:
-        files: List of uploaded files
-        parser: Parser service to extract content
-
-    Returns:
-        List of processed file data
-    """
-    processed_files = []
-
-    for file in files:
-        file_bytes = await file.read()
-        file_type = "text"
-        content = None
-
-        if file.filename.endswith('.pdf'):
-            file_type = "pdf"
-            content = parser.parse_pdf(file_bytes)
-
-        processed_files.append({
-            "filename": file.filename,
-            "type": file_type,
-            "bytes": file_bytes,
-            "content": content
-        })
-
-    return processed_files
-
-
-async def generate_chat_response(
-        llm: LLM,
-        system_prompt: str,
-        message: str
-):
-    """Stream chat response chunks"""
+async def generate_stream_response(supervisor: SupervisorAgent, user_id: str, message: str):
+    """Generate a streaming response from the supervisor agent"""
     try:
-        async for chunk in llm.generate_stream(system_prompt, message):
-            if chunk:
-                yield f"data: {chunk}\n\n"
+        async for chunk in supervisor.process_message(user_id=user_id, message=message):
+            print(f"[CHAT] Streaming chunk: {chunk}")
+            yield f"data: {json.dumps(chunk)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: Error: {str(e)}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
 
-@router.post("/stream")
-async def chat_stream(
+@router.post("")
+async def chat(
         current_user: CurrentUser,
         parser: Parser,
-        supervisor: SupervisorAgent,
+        llm: LLM,
+        pinecone: PineconeClient,
         message: str = Form(...),
-        files: Optional[List[UploadFile]] = File(None),
+        resume: Optional[UploadFile] = File(None),
         conversation_history: str = Form("[]"),
 ):
     """
-    Stream chat responses with optional file context
+    Process a chat message and return a streaming response
     """
     try:
-        print(f"[CHAT_STREAM] Processing message: {message[:50]}...")
-        print(f"[CHAT_STREAM] User: {current_user.user_id}")
-        print(f"[CHAT_STREAM] Files: {len(files) if files else 0}")
+        print(f"[CHAT] Processing message: {message[:50]}...")
+        print(f"[CHAT] User: {current_user.user_id}")
+        print(f"[CHAT] Resume file: {resume.filename if resume else 'None'}")
 
         # Parse conversation history
         history = json.loads(conversation_history)
-        print(f"[CHAT_STREAM] History items: {len(history)}")
+        print(f"[CHAT] History items: {len(history)}")
 
-        # Process any uploaded files
-        processed_files = await process_files(files or [], parser)
-        print(f"[CHAT_STREAM] Processed files: {len(processed_files)}")
-
-        # Process the message through supervisor
-        print(f"[CHAT_STREAM] Calling supervisor.process_message")
-        result = await supervisor.process_message(
+        # Create a new supervisor agent for this request
+        supervisor = await create_supervisor_agent(
             user_id=current_user.user_id,
-            message=message,
+            pinecone_client=pinecone,
+            llm=llm,
             conversation_history=history,
-            files=processed_files if processed_files else None
+            resume_file=resume,
+            resume_parser=parser
         )
 
-        print(f"[CHAT_STREAM] Supervisor selected agent: {result['selected_agent']}")
-        print(f"[CHAT_STREAM] Response: {result['response'][:100]}..." if result["response"] else "No response")
-
-        return JSONResponse(
-            content=result
+        # Return a streaming response
+        return StreamingResponse(
+            generate_stream_response(
+                supervisor=supervisor,
+                user_id=current_user.user_id,
+                message=message,
+            ),
+            media_type="text/event-stream"
         )
     except Exception as e:
-        print(f"[CHAT_STREAM] Error: {str(e)}")
+        print(f"[CHAT] Error: {str(e)}")
         import traceback
         traceback.print_exc()
         return StreamingResponse(
-            iter([f"data: Error: {str(e)}\n\n"]),
+            iter([f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"]),
             media_type="text/event-stream"
         )
-
-
-@router.post("/message")
-async def process_message(
-        current_user: CurrentUser,
-        supervisor: SupervisorAgent,
-        parser: Parser,
-        message: str = Form(...),
-        conversation_id: Optional[str] = Form(None),
-        conversation_history: str = Form("[]"),
-        files: Optional[List[UploadFile]] = File(None),
-):
-    """
-    Process a user message through the supervisor agent
-
-    Args:
-        message: User's message text
-        conversation_id: Optional conversation identifier
-        conversation_history: Previous conversation in JSON format
-        files: Optional files attached to the message
-        supervisor: Supervisor agent
-        parser: PDF parser service
-        current_user: Authenticated user info
-
-    Returns:
-        Agent response and updated conversation history
-    """
-    try:
-        # Parse conversation history
-        history = json.loads(conversation_history)
-
-        # Process any uploaded files
-        processed_files = await process_files(files or [], parser)
-
-        # Process the message
-        result = await supervisor.process_message(
-            user_id=current_user.user_id,
-            message=message,
-            conversation_history=history,
-            files=processed_files if processed_files else None
-        )
-
-        return {
-            "response": result["response"],
-            "conversation": result["conversation"],
-            "conversation_id": conversation_id or f"conv_{datetime.now().timestamp()}",
-            "selected_agent": result["active_agents"],
-            "error": result["error"]
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/conversations")

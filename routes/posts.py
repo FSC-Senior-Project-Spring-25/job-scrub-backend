@@ -9,7 +9,7 @@ from models.post import Post, CommentRequest
 router = APIRouter()
 
 
-@router.get("/posts")
+@router.get("")
 async def get_posts(db: Firestore, current_user: CurrentUser) -> List[Dict[str, Any]]:
     """Get all posts with user-specific like status"""
     posts = db.get_all_posts()
@@ -29,14 +29,14 @@ async def get_posts(db: Firestore, current_user: CurrentUser) -> List[Dict[str, 
     return posts
 
 
-@router.post("/posts")
+@router.post("")
 async def create_post(
         db: Firestore,
         post_data: Post,
         current_user: CurrentUser
 ) -> Dict[str, Any]:
     """Create a new post"""
-    author = current_user.email
+    author = post_data.author
     author_uid = current_user.user_id
     post_id = db.create_post(author, author_uid, post_data.content)
 
@@ -51,7 +51,7 @@ async def create_post(
     }
 
 
-@router.post("/posts/{post_id}/like")
+@router.post("/{post_id}/like")
 async def toggle_like(
         db: Firestore,
         post_id: str,
@@ -79,7 +79,7 @@ async def toggle_like(
     }
 
 
-@router.post("/posts/{post_id}/comment")
+@router.post("/{post_id}/comment")
 async def add_comment(
         db: Firestore,
         post_id: str,
@@ -87,7 +87,7 @@ async def add_comment(
         current_user: CurrentUser
 ) -> Dict[str, Any]:
     """Add a comment to a post"""
-    author = current_user.email
+    author = comment.author
     author_id = current_user.user_id
     comment_id = db.add_comment(post_id, author, author_id, comment.text)
 
