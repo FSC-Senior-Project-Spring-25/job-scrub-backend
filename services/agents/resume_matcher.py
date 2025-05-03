@@ -87,8 +87,6 @@ class ResumeMatchingAgent(Agent):
         builder.add_edge("compute_match_score", END)
 
         workflow = builder.compile()
-        print(workflow.get_graph().draw_ascii())
-
         return workflow
 
     def _extract_answer(self, result: MatchingState) -> dict:

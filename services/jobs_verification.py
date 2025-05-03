@@ -13,7 +13,7 @@ class JobsVerificationService:
         self.session = session
         self.index = index
         self.embedder = embedder
-# method for getting all jobs
+
     async def get_all_jobs(self, limit=100) -> list[dict]:
         """
         Get all jobs from the Pinecone index 

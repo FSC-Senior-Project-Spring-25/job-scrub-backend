@@ -112,8 +112,6 @@ app.include_router(resume_router, prefix="/resume", tags=["resume"])
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(posts_router, prefix="/posts", tags=["posts"])
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
-
 app.include_router(user_search_router, prefix="/users")
-
 app.include_router(follows_router, prefix="/users", tags=["follows"])
 
