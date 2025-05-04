@@ -8,7 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from services.agents.base.agent import ReActAgent, AgentResponse
-from services.gemini import GeminiLLM
+from services.llm.base.llm import LLM
 
 
 class UserSearchState(MessagesState):
@@ -20,7 +20,7 @@ class UserSearchAgent(ReActAgent):
     """Agent that searches for similar users by resume content in Pinecone."""
     METADATA_FIELDS = ["user_results"]
 
-    def __init__(self, llm: GeminiLLM, resume_index, resume_vector: List[float]):
+    def __init__(self, llm: LLM, resume_index, resume_vector: List[float]):
         self.resume_index = resume_index
         self.resume_vector = resume_vector
         super().__init__(llm)

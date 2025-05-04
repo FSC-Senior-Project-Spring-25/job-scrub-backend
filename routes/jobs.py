@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from fastapi.params import Query
 
-from dependencies import JobPoster, JobVerifier, LLM
+from dependencies import JobPoster, JobVerifier
 from models.job_report import JobReport, AutoFillJobReport
 from services.agents.tools.generate_job_report import generate_job_report
 
@@ -22,21 +22,17 @@ async def create_job_report(report: JobReport, job_service: JobPoster):
 
 
 @router.post("/autofill")
-async def autofill_job_report(
-        autofill: AutoFillJobReport,
-        llm: LLM
-):
+async def autofill_job_report(autofill: AutoFillJobReport):
     """
     Analyze unstructured job content and generate a structured JobReport
 
     Args:
         autofill: AutoFillJobReport containing job text content
-        llm: LLM instance for generating structured data
 
     Returns:
         Structured JobReport from the content analysis
     """
-    job_report = await generate_job_report(autofill.content, llm)
+    job_report = await generate_job_report(autofill.content)
     return job_report
 
 

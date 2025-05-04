@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File
 from fastapi.responses import StreamingResponse
 
-from dependencies import LLM, Parser, CurrentUser, PineconeClient
+from dependencies import Parser, CurrentUser, PineconeClient
 from services.agents.supervisor_agent import SupervisorAgent
 from services.agents.tools.create_supervisor_agent import create_supervisor_agent
 
@@ -16,7 +16,6 @@ async def generate_stream_response(supervisor: SupervisorAgent, user_id: str, me
     """Generate a streaming response from the supervisor agent"""
     try:
         async for chunk in supervisor.process_message(user_id=user_id, message=message):
-            print(f"[CHAT] Streaming chunk: {chunk}")
             yield f"data: {json.dumps(chunk)}\n\n"
         yield "data: [DONE]\n\n"
     except Exception as e:
@@ -27,7 +26,6 @@ async def generate_stream_response(supervisor: SupervisorAgent, user_id: str, me
 async def chat(
         current_user: CurrentUser,
         parser: Parser,
-        llm: LLM,
         pinecone: PineconeClient,
         message: str = Form(...),
         resume: Optional[UploadFile] = File(None),
@@ -49,7 +47,6 @@ async def chat(
         supervisor = await create_supervisor_agent(
             user_id=current_user.user_id,
             pinecone_client=pinecone,
-            llm=llm,
             conversation_history=history,
             resume_file=resume,
             resume_parser=parser

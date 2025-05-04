@@ -1,12 +1,13 @@
 from fastapi import HTTPException
 
 from models.job_report import JobReport
-from services.gemini import ResponseFormat, GeminiLLM
+from services.llm.base.llm import ResponseFormat, LLM
+from services.llm.groq import GroqLLM
 
 
 async def generate_job_report(
         content: str,
-        llm: GeminiLLM = GeminiLLM(),
+        llm: LLM = GroqLLM(),
 ) -> JobReport:
     """
     Analyze unstructured job content and generate a structured JobReport using LLM
@@ -18,22 +19,39 @@ async def generate_job_report(
     Returns:
         Structured JobReport from the content analysis
     """
-    system_prompt = """
+    # Get JobReport schema details
+    job_report_schema = JobReport.model_json_schema()
+
+    system_prompt = f"""
     You are a job posting analyzer. Extract structured information from the provided job description.
-    Return a valid JSON object that matches the JobReport schema with these fields:
+
+    IMPORTANT FORMATTING REQUIREMENTS:
+    - Return ONLY a valid JSON object with no additional text, explanations, or markdown
+    - No prefixes, suffixes, or code blocks
+    - The output must be parseable by Python's json.loads()
+    - Do NOT truncate any fields
+    - Do NOT omit any required fields
+
+    SCHEMA DEFINITION:
     - title: string (job title)
     - company: string (company name)
     - url: string (job posting URL or empty string if not found)
-    - description: string (full job description)
-    - jobType: string (one of: "fulltime", "parttime", "internship", "contract", "volunteer")
+    - description: string (full job description, include the complete text not including title, date, or text not relevant to the job)
+    - jobType: string (MUST be exactly one of: "fulltime", "parttime", "internship", "contract", "volunteer")
     - skills: array of strings (required skills)
     - location: object with:
       - address: string (location name/address)
       - lat: float (latitude, use 0 if unknown)
       - lon: float (longitude, use 0 if unknown)
-    - locationType: string (one of: "remote", "onsite", "hybrid")
+    - locationType: string (MUST be exactly one of: "remote", "onsite", "hybrid")
     - benefits: array of strings (job benefits)
     - salary: string (salary information or null if not specified)
+    
+    SCHEMA:
+    {job_report_schema}
+
+    Output JSON format example:
+    {{"title": "Software Engineer", "company": "Example Inc", "url": "https://example.com", "description": "Full job description...", "jobType": "fulltime", "skills": ["Python", "FastAPI"], "location": {{"address": "Remote USA", "lat": 0, "lon": 0}}, "locationType": "remote", "benefits": ["Health Insurance", "401k"], "salary": "$100,000-$120,000"}}
     """
 
     # Get structured analysis from Gemini
@@ -42,7 +60,6 @@ async def generate_job_report(
         user_message=content,
         response_format=ResponseFormat.JSON
     )
-
     if not response.success:
         raise HTTPException(status_code=500, detail=f"Failed to analyze job content: {response.error}")
 

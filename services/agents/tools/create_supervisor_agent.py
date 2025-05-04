@@ -11,7 +11,8 @@ from services.agents.supervisor_agent import SupervisorAgent
 from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
 from services.agents.user_search_agent import UserSearchAgent
-from services.gemini import GeminiLLM
+from services.llm.base.llm import LLM
+from services.llm.groq import GroqLLM
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
@@ -19,7 +20,7 @@ from services.text_embedder import TextEmbedder
 async def create_supervisor_agent(
         user_id: str,
         pinecone_client: Pinecone,
-        llm: GeminiLLM = GeminiLLM(),
+        llm: LLM = GroqLLM(),
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         resume_file: Optional[UploadFile] = None,
         resume_parser: ResumeParser = ResumeParser(),
@@ -56,11 +57,10 @@ async def create_supervisor_agent(
 
     # Create all agent instances
     agents = create_agent_instances(
-        llm=llm,
         pinecone_client=pinecone_client,
         resume_data=resume_data,
-        resume_parser=resume_parser,
-        text_embedder=text_embedder
+        text_embedder=text_embedder,
+        llm=llm
     )
 
     # Create and return the supervisor agent
@@ -175,11 +175,10 @@ def convert_conversation_history(conversation_history: Optional[List[Dict[str, A
 
 
 def create_agent_instances(
-        llm: GeminiLLM,
         pinecone_client: Pinecone,
         resume_data: dict,
-        resume_parser: ResumeParser,
-        text_embedder: TextEmbedder
+        text_embedder: TextEmbedder,
+        llm: LLM,
 ) -> dict:
     """Create all required agent instances"""
     return {

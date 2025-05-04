@@ -8,7 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from services.agents.base.agent import ReActAgent, AgentResponse
-from services.gemini import ResponseFormat, GeminiLLM
+from services.llm.base.llm import LLM, ResponseFormat
 
 
 class EnhancementState(MessagesState):
@@ -40,7 +40,7 @@ class ResumeEnhancementAgent(ReActAgent):
     def __init__(
             self,
             resume_text: str,
-            llm: GeminiLLM = GeminiLLM(),
+            llm: LLM,
     ):
         """
         Initializes the ResumeEnhancementAgent.

@@ -1,11 +1,11 @@
 from typing import List, Dict, Optional, Any
 
 from models.chat import Message
-from services.gemini import ResponseFormat, GeminiLLM
+from services.llm.base.llm import LLM, ResponseFormat
 
 
 async def handle_chat(
-        llm: GeminiLLM,
+        llm: LLM,
         message: str,
         conversation_history: List[Message],
         files: Optional[List[Dict[str, Any]]] = None,
@@ -14,7 +14,7 @@ async def handle_chat(
     Handle general chat messages using Gemini
 
     Args:
-        llm: GeminiLLM instance to use for generation
+        llm: LLM instance to use for generation
         message: User's current message
         conversation_history: Previous conversation messages
         files: Optional attached files

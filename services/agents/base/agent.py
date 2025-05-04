@@ -6,7 +6,7 @@ from langgraph.graph import MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel
 
-from services.gemini import GeminiLLM
+from services.llm.base.llm import LLM
 
 
 class AgentResponse(BaseModel):
@@ -22,7 +22,7 @@ AgentState = Union[Dict[str, Any], TypedDict, BaseModel]
 class Agent(ABC):
     """Base class for all agents"""
 
-    def __init__(self, llm: GeminiLLM = GeminiLLM()):
+    def __init__(self, llm: LLM):
         self.llm = llm
         self.workflow = self._create_workflow()
 
@@ -61,7 +61,7 @@ class Agent(ABC):
 class ReActAgent(Agent):
     """Base class for ReAct pattern agents"""
 
-    def __init__(self, llm: GeminiLLM = GeminiLLM()):
+    def __init__(self, llm: LLM):
         self.llm = llm
         self.tools = self._create_tools()
         self.llm_with_tools = self.llm.chat.bind_tools(self.tools)

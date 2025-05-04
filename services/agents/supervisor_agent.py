@@ -20,7 +20,8 @@ from services.agents.tools.chat_handler import handle_chat
 from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
 from services.agents.user_search_agent import UserSearchAgent
-from services.gemini import GeminiLLM, ResponseFormat
+from services.llm.base.llm import LLM, ResponseFormat
+from services.llm.gemini import GeminiLLM
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
@@ -59,7 +60,7 @@ class SupervisorAgent:
 
     def __init__(
             self,
-            llm: GeminiLLM,
+            llm: LLM,
             pc: Pinecone,
             resume_matcher: ResumeMatchingAgent,
             resume_enhancer: ResumeEnhancementAgent,
@@ -253,8 +254,7 @@ class SupervisorAgent:
             )
 
         async def run_matcher():
-            return await self.resume_matcher.analyze_resume_text(
-                resume_text=resume_text,
+            return await self.resume_matcher.invoke(
                 job_description=state.current_message
             )
 
@@ -402,7 +402,7 @@ if __name__ == "__main__":
     supervisor = SupervisorAgent(
         llm=gemini_llm,
         pc=pc,
-        resume_matcher=ResumeMatchingAgent(resume_parser=ResumeParser(), text_embedder=TextEmbedder(), llm=gemini_llm),
+        resume_matcher=ResumeMatchingAgent(resume_parser=ResumeParser(), embedder=TextEmbedder(), llm=gemini_llm),
         resume_enhancer=ResumeEnhancementAgent(gemini_llm),
         user_profile_agent=UserProfileAgent(gemini_llm),
         job_search_agent=JobSearchAgent(gemini_llm, pc.Index("job-postings"), resume_data["vector"]),

@@ -1,9 +1,10 @@
-from services.gemini import GeminiLLM, ResponseFormat
+from services.llm.base.llm import LLM, ResponseFormat
+from services.llm.gemini import GeminiLLM
 
 
 async def extract_keywords(
         text: str,
-        llm: GeminiLLM,
+        llm: LLM = GeminiLLM(),
 ) -> list[str]:
     """Extract technical keywords from text using Gemini"""
     system_prompt = """You are a technical keyword extraction assistant. 

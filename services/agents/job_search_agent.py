@@ -8,7 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from services.agents.base.agent import ReActAgent, AgentResponse
-from services.gemini import GeminiLLM
+from services.llm.base.llm import LLM
 
 
 class JobSearchState(MessagesState):
@@ -20,7 +20,7 @@ class JobSearchAgent(ReActAgent):
     """A job search agent that uses a single tool to query Pinecone with optional metadata filters."""
     METADATA_FIELDS = ["job_results"]
 
-    def __init__(self, llm: GeminiLLM, job_index, resume_vector: List[float]):
+    def __init__(self, llm: LLM, job_index, resume_vector: List[float]):
         self.job_index = job_index
         self.resume_vector = resume_vector
         super().__init__(llm)

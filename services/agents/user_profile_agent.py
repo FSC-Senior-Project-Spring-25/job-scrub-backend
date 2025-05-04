@@ -9,7 +9,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from services.agents.base.agent import ReActAgent, AgentResponse
-from services.gemini import GeminiLLM, ResponseFormat
+from services.llm.base.llm import LLM, ResponseFormat
+from services.llm.groq import GroqLLM
 
 load_dotenv()
 
@@ -32,12 +33,13 @@ class UserProfileAgent(ReActAgent):
     def __init__(
             self,
             resume_text: str,
-            llm: GeminiLLM = GeminiLLM()
+            llm: LLM = GroqLLM()
     ):
         """
         Initialize the user profile agent with ReAct capabilities
 
         Args:
+            resume_text: The resume text to analyze
             llm: LLM service for profile analysis
         """
         self.resume_text = resume_text

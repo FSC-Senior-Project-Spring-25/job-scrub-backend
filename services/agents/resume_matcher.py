@@ -5,8 +5,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 from services.agents.base.agent import AgentResponse, Agent
 from services.agents.tools.extract_keywords import extract_keywords
-from services.gemini import GeminiLLM
-from services.resume_parser import ResumeParser
+from services.llm.base.llm import LLM
+from services.llm.gemini import GeminiLLM
 from services.text_embedder import TextEmbedder
 
 
@@ -26,6 +26,7 @@ class ResumeMatchingAgent(Agent):
     def __init__(self, resume_parser: ResumeParser, text_embedder: TextEmbedder, llm: GeminiLLM = GeminiLLM()):
         self.resume_parser = resume_parser
         self.text_embedder = text_embedder
+            llm: LLM = GeminiLLM(),
         super().__init__(llm)
 
     async def invoke(self, resume_bytes: bytes, job_description: str) -> AgentResponse:
