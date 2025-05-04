@@ -1,14 +1,15 @@
 from typing import List, Dict, Optional, Any
 
 from models.chat import Message
-from services.llm.base.llm import LLM, ResponseFormat
+from services.llm.base.llm import LLM
+from services.llm.groq import GroqLLM
 
 
 async def handle_chat(
-        llm: LLM,
         message: str,
         conversation_history: List[Message],
         files: Optional[List[Dict[str, Any]]] = None,
+        llm: LLM = GroqLLM(),
 ) -> str:
     """
     Handle general chat messages using Gemini
@@ -70,17 +71,12 @@ async def handle_chat(
             USER: {message}
             """
 
-        # Debug the prompt
-        print(f"[CHAT_HANDLER] System prompt: {system_prompt[:100]}...")
-        print(f"[CHAT_HANDLER] User prompt: {user_prompt[:100]}...")
-
         if not llm:
             return "Error: LLM instance not provided to chat handler"
 
         response = await llm.agenerate(
             system_prompt=system_prompt,
             user_message=user_prompt,
-            response_format=ResponseFormat.RAW
         )
 
         if not response.success:
