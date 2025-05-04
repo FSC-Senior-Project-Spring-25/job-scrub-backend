@@ -4,7 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from starlette.responses import JSONResponse
 
-from dependencies import MatchingAgent, S3, Parser, LLM, PineconeClient, Embedder, CurrentUser
+from dependencies import S3, Parser, PineconeClient, Embedder, CurrentUser
+from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.extract_keywords import extract_keywords
 
 router = APIRouter()
@@ -12,7 +13,8 @@ router = APIRouter()
 
 @router.post("/match")
 async def calculate_resume_similarity(
-        matching_agent: MatchingAgent,
+        resume_parser: Parser,
+        embedder: Embedder,
         resume_file: Annotated[UploadFile, File(alias="resumeFile", validation_alias="resumeFile")],
         job_description: str = Form(
             ...,
@@ -32,9 +34,14 @@ async def calculate_resume_similarity(
 
         # Read the PDF bytes
         file_bytes = await resume_file.read()
+        resume_text = resume_parser.parse_pdf(file_bytes)
 
+        matching_agent = ResumeMatchingAgent(
+            embedder=embedder,
+            resume_text=resume_text,
+        )
         # Process using the matching agent
-        result = await matching_agent.invoke(file_bytes, job_description)
+        result = await matching_agent.invoke(job_description)
 
         return result.answer
 
@@ -46,7 +53,6 @@ async def calculate_resume_similarity(
 async def upload_resume(
         s3_service: S3,
         parser: Parser,
-        llm: LLM,
         pinecone: PineconeClient,
         embedder: Embedder,
         current_user: CurrentUser,
@@ -70,7 +76,7 @@ async def upload_resume(
             text = parser.parse_pdf(file_bytes)
 
             # Run text processing tasks concurrently
-            keywords_task = extract_keywords(text, llm)
+            keywords_task = extract_keywords(text)
             embeddings_task = embedder.get_embeddings([text])
             upload_task = s3_service.upload_file(
                 file=file,

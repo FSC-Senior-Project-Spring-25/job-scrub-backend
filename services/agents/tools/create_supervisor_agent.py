@@ -90,7 +90,6 @@ async def process_resume_file(
 
     if resume_file:
         file_bytes = await resume_file.read()
-        content = None
 
         if resume_file.filename.endswith('.pdf'):
             content = resume_parser.parse_pdf(file_bytes)
@@ -183,9 +182,8 @@ def create_agent_instances(
     """Create all required agent instances"""
     return {
         "resume_matcher": ResumeMatchingAgent(
-            resume_parser=resume_parser,
-            text_embedder=text_embedder,
-            llm=llm
+            embedder=text_embedder,
+            resume_text=resume_data.get("text"),
         ),
         "resume_enhancer": ResumeEnhancementAgent(
             resume_text=resume_data.get("text"),
