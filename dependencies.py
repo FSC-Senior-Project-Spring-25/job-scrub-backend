@@ -7,12 +7,7 @@ from pinecone import Pinecone
 
 from context import request_context
 from models.user import User
-from services.agents.resume_enhancer import ResumeEnhancementAgent
-from services.agents.resume_matcher import ResumeMatchingAgent
-from services.agents.supervisor_agent import SupervisorAgent
-from services.agents.user_profile_agent import UserProfileAgent
 from services.firestore import FirestoreDB
-from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
@@ -88,34 +83,9 @@ async def get_job_verification_service(request: Request) -> JobsVerificationServ
     return request.app.state.job_verification_service
 
 
-async def get_gemini_llm(request: Request) -> GeminiLLM:
-    """Get embedder from app state"""
-    return request.app.state.gemini_llm
-
-
 async def get_resume_parser(request: Request) -> ResumeParser:
     """Get embedder from app state"""
     return request.app.state.resume_parser
-
-
-async def get_resume_agent(request: Request) -> ResumeMatchingAgent:
-    """Get embedder from app state"""
-    return request.app.state.resume_agent
-
-
-async def get_resume_enhancer(request: Request) -> ResumeEnhancementAgent:
-    """Get embedder from app state"""
-    return request.app.state.resume_enhancer
-
-
-async def get_user_profile_agent(request: Request) -> UserProfileAgent:
-    """Get user profile agent from app state"""
-    return request.app.state.user_profile_agent
-
-
-async def get_supervisor_agent(request: Request) -> SupervisorAgent:
-    """Get embedder from app state"""
-    return request.app.state.supervisor_agent
 
 
 # Type annotations for dependency injection (used in non-FastAPI routes with @injectable)
@@ -126,9 +96,4 @@ PineconeClient = Annotated[Pinecone, Depends(get_pinecone)]
 Embedder = Annotated[TextEmbedder, Depends(get_embedder)]
 JobPoster = Annotated[JobsPostingService, Depends(get_job_posting_service)]
 JobVerifier = Annotated[JobsVerificationService, Depends(get_job_verification_service)]
-LLM = Annotated[GeminiLLM, Depends(get_gemini_llm)]
 Parser = Annotated[ResumeParser, Depends(get_resume_parser)]
-MatchingAgent = Annotated[ResumeMatchingAgent, Depends(get_resume_agent)]
-EnhancementAgent = Annotated[ResumeEnhancementAgent, Depends(get_resume_enhancer)]
-ProfileAgent = Annotated[UserProfileAgent, Depends(get_user_profile_agent)]
-SupervisorAgent = Annotated[SupervisorAgent, Depends(get_supervisor_agent)]

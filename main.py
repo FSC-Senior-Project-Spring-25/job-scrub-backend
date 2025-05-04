@@ -21,11 +21,6 @@ from routes.jobs import router as jobs_router
 from routes.posts import router as posts_router
 from routes.resume import router as resume_router
 from routes.user_search import router as user_search_router
-from services.agents.resume_enhancer import ResumeEnhancementAgent
-from services.agents.resume_matcher import ResumeMatchingAgent
-from services.agents.supervisor_agent import SupervisorAgent
-from services.agents.user_profile_agent import UserProfileAgent
-from services.gemini import GeminiLLM
 from services.jobs_posting import JobsPostingService
 from services.jobs_verification import JobsVerificationService
 from services.resume_parser import ResumeParser
@@ -64,16 +59,9 @@ async def lifespan(app: FastAPI):
     s3 = S3(BUCKET_NAME, s3_client)
     firestore = Firestore(firebase_app)
     embedder = TextEmbedder()
-    gemini_llm = GeminiLLM()
-
-    job_posting_service = JobsPostingService(embedder, index, gemini_llm, session)
-    job_verification_service = JobsVerificationService(session, index, embedder)
-
     resume_parser = ResumeParser()
-    resume_matching_agent = ResumeMatchingAgent(
-        resume_parser=resume_parser,
-        text_embedder=embedder,
-    )
+    job_posting_service = JobsPostingService(embedder, index, session)
+    job_verification_service = JobsVerificationService(session, index, embedder)
 
     app.state.session = session
     app.state.s3_service = s3
@@ -83,8 +71,6 @@ async def lifespan(app: FastAPI):
     app.state.resume_parser = resume_parser
     app.state.job_posting_service = job_posting_service
     app.state.job_verification_service = job_verification_service
-    app.state.gemini_llm = gemini_llm
-    app.state.resume_agent = resume_matching_agent
 
     yield
     # Cleanup resources
