@@ -8,8 +8,8 @@ class GeminiLLM(LLM):
 
     def __init__(
             self,
-            model: str = "gemini-2.0-flash-lite",
-            temperature: float = 0.0,
+            model: str = "gemini-2.0-flash",
+            temperature: float = 0.15,
             max_retries: int = 2
     ):
         """Initialize Gemini LLM interface

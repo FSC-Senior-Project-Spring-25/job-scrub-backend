@@ -9,7 +9,7 @@ class GroqLLM(LLM):
     def __init__(
             self,
             model: str = "gemma2-9b-it",
-            temperature: float = 0.0,
+            temperature: float = 0.3,
             max_retries: int = 2
     ):
         """Initialize Groq LLM interface
