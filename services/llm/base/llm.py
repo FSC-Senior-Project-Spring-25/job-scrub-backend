@@ -1,223 +1,172 @@
-from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Optional, Union, Dict, Any, List, AsyncGenerator
+from __future__ import annotations
+
 import json
+import typing
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import (
+    Any,
+    AsyncGenerator,
+    Dict,
+    List,
+    Optional,
+    Type,
+    Union,
+)
 
 from dotenv import load_dotenv
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
-
-
-class ResponseFormat(Enum):
-    """Enum for response format types"""
-    RAW = "raw"
-    JSON = "json"
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from pydantic import BaseModel
 
 
 @dataclass
 class LLMResponse:
-    """Container for LLM responses"""
-    content: Union[str, Dict[str, Any]]
+    """Uniform wrapper for sync / async calls."""
+    content: Union[str, BaseModel, Dict[str, Any]]
     raw_response: str
     success: bool
     error: Optional[str] = None
 
 
 class LLM(ABC):
-    """Base interface for LLM interactions"""
+    """
+    Base wrapper around a `BaseChatModel`.
+    """
 
     @abstractmethod
     def __init__(
             self,
             model: str,
             temperature: float = 0.0,
-            max_retries: int = 2
+            max_retries: int = 2,
     ):
-        """Initialize LLM interface
-
-        Args:
-            model: The LLM model to use
-            temperature: Controls randomness in output (0.0 = deterministic)
-            max_retries: Number of retry attempts for failed calls
-        """
         load_dotenv()
-        self.chat = None
+        self.model = model
+        self.temperature = temperature
+        self.max_retries = max_retries
 
+        # Sub‑classes must assign an actual chat model
+        self.chat: BaseChatModel = None  # type: ignore
+
+    @staticmethod
     def _create_messages(
+            system_prompt: str, user_message: str
+    ) -> List[BaseMessage]:
+        """ Create messages for the LLM."""
+        return [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message),
+        ]
+
+    @staticmethod
+    def _as_string(resp_content: Any) -> str:
+        """Best‑effort serialization for `raw_response`."""
+        if isinstance(resp_content, str):
+            return resp_content
+        if isinstance(resp_content, BaseModel):
+            return resp_content.model_dump_json()
+        try:
+            return json.dumps(resp_content)
+        except Exception:
+            return str(resp_content)
+
+    def generate(
             self,
             system_prompt: str,
             user_message: str,
-            response_format: ResponseFormat
-    ) -> List[BaseMessage]:
-        """Create formatted messages for the LLM
-
-        Args:
-            system_prompt: The system instruction prompt
-            user_message: The user's input message
-            response_format: Desired format for the response
-
-        Returns:
-            List of formatted messages
-        """
-        format_instruction = ""
-        if response_format == ResponseFormat.JSON:
-            format_instruction = "\nProvide your response as a valid JSON object."
-
-        return [
-            SystemMessage(content=f"{system_prompt}{format_instruction}"),
-            HumanMessage(content=user_message)
-        ]
-
-    def _parse_response(
-            self,
-            response_text: str,
-            format_type: ResponseFormat
+            *,
+            response_format: Optional[Type[BaseModel]] = None,
     ) -> LLMResponse:
-        """Parse the LLM response based on desired format
+        """
+        Generate a response from the LLM.
 
         Args:
-            response_text: Raw response from the LLM
-            format_type: Desired response format
-
-        Returns:
-            LLMResponse object containing parsed content
+            system_prompt (str): The system prompt to set the context.
+            user_message (str): The user message to generate a response for.
+            response_format (Optional[Type[BaseModel]]): The expected output schema.
         """
-        if format_type == ResponseFormat.RAW:
-            return LLMResponse(
-                content=response_text,
-                raw_response=response_text,
-                success=True
-            )
-
         try:
-            # Try to parse as JSON, cleaning up common formatting issues
-            cleaned_text = response_text.strip()
-
-            # Extract JSON content if it's wrapped in markdown code blocks
-            if "```json" in cleaned_text:
-                start = cleaned_text.find("```json") + 7
-                end = cleaned_text.find("```", start)
-                if end != -1:
-                    cleaned_text = cleaned_text[start:end].strip()
-            elif cleaned_text.startswith("```") and "```" in cleaned_text[3:]:
-                start = cleaned_text.find("```") + 3
-                end = cleaned_text.find("```", start)
-                if end != -1:
-                    cleaned_text = cleaned_text[start:end].strip()
-
-            # Find the first { and last } to extract valid JSON if there's extra text
-            first_brace = cleaned_text.find('{')
-            last_brace = cleaned_text.rfind('}')
-
-            if first_brace != -1 and last_brace != -1:
-                cleaned_text = cleaned_text[first_brace:last_brace + 1]
-
-            json_content = json.loads(cleaned_text)
-            return LLMResponse(
-                content=json_content,
-                raw_response=response_text,
-                success=True
+            msgs = self._create_messages(system_prompt, user_message)
+            # Use `with_structured_output` if an output schema is provided
+            chat = (
+                self.chat.with_structured_output(response_format)
+                if response_format
+                else self.chat
             )
-        except json.JSONDecodeError as e:
+            resp = chat.invoke(msgs)
+            content = resp.content if isinstance(resp, BaseMessage) else resp
+            return LLMResponse(
+                content=content,
+                raw_response=self._as_string(content),
+                success=True,
+            )
+
+        except Exception as exc:
             return LLMResponse(
                 content={},
-                raw_response=response_text,
+                raw_response="",
                 success=False,
-                error=f"Failed to parse JSON response: {str(e)}"
+                error=f"Generation failed: {exc}",
             )
 
     async def agenerate(
             self,
             system_prompt: str,
             user_message: str,
-            response_format: ResponseFormat = ResponseFormat.RAW
+            *,
+            response_format: Optional[Union[typing.Dict, type]] = None,
     ) -> LLMResponse:
-        """Generate a response from the LLM
+        """
+        Async generate a response from the LLM.
 
         Args:
-            system_prompt: System instruction prompt
-            user_message: User's input message
-            response_format: Desired format for the response
-
-        Returns:
-            LLMResponse object containing the response
+            system_prompt (str): The system prompt to set the context.
+            user_message (str): The user message to generate a response for.
+            response_format (Optional[Type[BaseModel]]): The expected output schema.
         """
         try:
-            messages = self._create_messages(system_prompt, user_message, response_format)
-            response = await self.chat.ainvoke(messages)
-            return self._parse_response(response.content, response_format)
-        except Exception as e:
+            msgs = self._create_messages(system_prompt, user_message)
+            # Use `with_structured_output` if an output schema is provided
+            chat = (
+                self.chat.with_structured_output(response_format)
+                if response_format
+                else self.chat
+            )
+            resp = await chat.ainvoke(msgs)
+            print(f"[LLM] Response: {resp}", type(resp))
+            content = resp.content if isinstance(resp, BaseMessage) else resp
             return LLMResponse(
-                content="" if response_format == ResponseFormat.RAW else {},
-                raw_response="",
-                success=False,
-                error=f"Generation failed: {str(e)}"
+                content=content,
+                raw_response=self._as_string(content),
+                success=True,
             )
 
-    def generate(
-            self,
-            system_prompt: str,
-            user_message: str,
-            response_format: ResponseFormat = ResponseFormat.RAW
-    ) -> LLMResponse:
-        """Generate a response from the LLM
-
-        Args:
-            system_prompt: System instruction prompt
-            user_message: User's input message
-            response_format: Desired format for the response
-
-        Returns:
-            LLMResponse object containing the response
-        """
-        try:
-            messages = self._create_messages(system_prompt, user_message, response_format)
-            response = self.chat.invoke(messages)
-            return self._parse_response(response.content, response_format)
-        except Exception as e:
+        except Exception as exc:
+            print(f"[LLM] Generation failed: {exc}")
             return LLMResponse(
-                content="" if response_format == ResponseFormat.RAW else {},
+                content={},
                 raw_response="",
                 success=False,
-                error=f"Generation failed: {str(e)}"
+                error=f"Generation failed: {exc}",
             )
 
     async def generate_stream(
             self,
             system_prompt: str,
             user_message: str,
-            response_format: ResponseFormat = ResponseFormat.RAW
     ) -> AsyncGenerator[str, None]:
-        """Generate a streaming response from the LLM
+        """
+        Generate a response from the LLM in streaming mode.
 
         Args:
-            system_prompt: System instruction prompt
-            user_message: User's input message
-            response_format: Desired format for the response
-
-        Yields:
-            Chunks of the generated response
+            system_prompt (str): The system prompt to set the context.
+            user_message (str): The user message to generate a response for.
         """
         try:
-            messages = self._create_messages(system_prompt, user_message, response_format)
-            stream = self.chat.astream(messages)
-
-            buffer = ""
-            async for chunk in stream:
+            msgs = self._create_messages(system_prompt, user_message)
+            async for chunk in self.chat.astream(msgs):
                 if chunk.content:
-                    if response_format == ResponseFormat.JSON:
-                        # Buffer JSON content
-                        buffer += chunk.content
-                    else:
-                        yield chunk.content
-
-            # If JSON format, yield the complete buffered content
-            if response_format == ResponseFormat.JSON and buffer:
-                try:
-                    json_content = json.loads(buffer)
-                    yield json.dumps(json_content)
-                except json.JSONDecodeError:
-                    yield buffer
-
-        except Exception as e:
-            yield f"Error: {str(e)}"
+                    yield chunk.content
+        except Exception as exc:
+            yield f"Error: {exc}"
