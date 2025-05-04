@@ -12,7 +12,7 @@ from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
 from services.agents.user_search_agent import UserSearchAgent
 from services.llm.base.llm import LLM
-from services.llm.groq import GroqLLM
+from services.llm.gemini import GeminiLLM
 from services.resume_parser import ResumeParser
 from services.text_embedder import TextEmbedder
 
@@ -20,7 +20,7 @@ from services.text_embedder import TextEmbedder
 async def create_supervisor_agent(
         user_id: str,
         pinecone_client: Pinecone,
-        llm: LLM = GroqLLM(),
+        llm: LLM = GeminiLLM(),
         conversation_history: Optional[List[Dict[str, Any]]] = None,
         resume_file: Optional[UploadFile] = None,
         resume_parser: ResumeParser = ResumeParser(),
@@ -184,6 +184,7 @@ def create_agent_instances(
         "resume_matcher": ResumeMatchingAgent(
             embedder=text_embedder,
             resume_text=resume_data.get("text"),
+            llm=llm
         ),
         "resume_enhancer": ResumeEnhancementAgent(
             resume_text=resume_data.get("text"),
