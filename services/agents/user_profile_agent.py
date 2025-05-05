@@ -7,12 +7,50 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
 
 from services.agents.base.agent import ReActAgent, AgentResponse
-from services.llm.base.llm import LLM, ResponseFormat
+from services.llm.base.llm import LLM
 from services.llm.groq import GroqLLM
 
 load_dotenv()
+
+
+class ContactInfo(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+
+
+class CurrentPosition(BaseModel):
+    title: Optional[str] = None
+    company: Optional[str] = None
+    duration: Optional[str] = None
+
+
+class Education(BaseModel):
+    highest_degree: Optional[str] = None
+    field: Optional[str] = None
+    institution: Optional[str] = None
+
+
+class Project(BaseModel):
+    name: str
+    description: Optional[str] = None
+    technologies: List[str] = Field(default_factory=list)
+
+
+class ProfileInfoModel(BaseModel):
+    name: Optional[str] = None
+    contact: ContactInfo = ContactInfo()
+    current_position: CurrentPosition = CurrentPosition()
+    experience_years: Optional[int] = None
+    top_skills: List[str] = Field(default_factory=list)
+    education: Education = Education()
+    industry: Optional[str] = None
+    career_level: Optional[str] = None
+    projects: List[Project] = Field(default_factory=list)
+    certifications: List[str] = Field(default_factory=list)
 
 
 class ProfileAgentState(MessagesState):
@@ -75,6 +113,7 @@ class UserProfileAgent(ReActAgent):
                 "messages": [
                     {"role": "user", "content": f"Analyze this resume and answer: {prompt}"}
                 ],
+                "profile_info": None,
             }
             # Initialize metadata fields
             for field in self.METADATA_FIELDS:
@@ -89,40 +128,11 @@ class UserProfileAgent(ReActAgent):
                 metadata={"agent_type": "user_profile", "error_type": type(e).__name__}
             )
 
-    def _extract_answer(self, state: Dict[str, Any]) -> str:
-        """
-        Extract final answer from result.
-        Overrides method from Agent base class.
-        """
-        # Use the parent implementation to extract the answer
-        answer = super()._extract_answer(state)
-        print("Final User Profile Message:", answer)
-        return answer
-
-    def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract metadata from the state.
-        Overrides method from Agent base class.
-
-        Returns:
-            Dictionary with metadata fields
-        """
-        metadata = {"agent_type": "user_profile"}
-        print("Extract Metadata Fields:", state)
-        # Add all tracked fields to metadata
-        for field in self.METADATA_FIELDS:
-            if field in state:
-                metadata[field] = state.get(field)
-
-        print("Extracted Metadata:", metadata)
-        return metadata
-
     def _create_workflow(self) -> CompiledStateGraph:
         """
         Create and return the agent's workflow.
         Implements abstract method from Agent base class.
         """
-        # Build the ReAct agent state graph
         builder = StateGraph(ProfileAgentState)
         builder.add_node("think", self.think)
         builder.add_node("tools", ToolNode(self.tools))
@@ -139,14 +149,13 @@ class UserProfileAgent(ReActAgent):
         Returns:
             List of tools for the ReAct agent.
         """
-        tools = [
-            self._create_extract_profile_tool(),
-        ]
-        return tools
+        return [self._create_extract_profile_tool()]
 
     def _create_extract_profile_tool(self):
         @tool(parse_docstring=True)
-        async def extract_profile_tool(keywords: Optional[List[str]] = None) -> Dict[str, Any]:
+        async def extract_profile_tool(
+                keywords: Optional[List[str]] = None
+        ) -> Dict[str, Any]:
             """
             Extract structured profile information from resume text.
 
@@ -175,57 +184,25 @@ class UserProfileAgent(ReActAgent):
 
             Resume keywords: {", ".join(keywords) if keywords else "No keywords available"}
 
-            Return the information as a JSON object with the following structure:
-            {{
-                "name": "Full Name",
-                "contact": {{
-                    "email": "email@example.com",
-                    "phone": "optional phone number",
-                    "location": "City, State"
-                }},
-                "current_position": {{
-                    "title": "Job Title",
-                    "company": "Company Name",
-                    "duration": "Duration in role (e.g., '2 years')"
-                }},
-                "experience_years": 5,
-                "top_skills": ["Skill 1", "Skill 2", "Skill 3"],
-                "education": {{
-                    "highest_degree": "Degree Type",
-                    "field": "Field of Study",
-                    "institution": "School Name"
-                }},
-                "industry": "Primary industry",
-                "career_level": "entry/mid/senior/executive",
-                "projects": [
-                    {{
-                        "name": "Project Name",
-                        "description": "Brief description",
-                        "technologies": ["Tech 1", "Tech 2"]
-                    }}
-                ],
-                "certifications": ["Certification 1", "Certification 2"]
-            }}
-
-            If certain information is not available, use null for that field.
+            Return ONLY JSON conforming to the schema provided.
             """
 
             response = await self.llm.agenerate(
                 system_prompt="You are an expert resume analyst tasked with extracting structured information from resume text.",
                 user_message=prompt,
-                response_format=ResponseFormat.JSON
+                response_format=ProfileInfoModel,
             )
 
             if not response.success:
                 return {
                     "success": False,
                     "error": f"Failed to extract profile: {response.error}",
-                    "profile_info": None
+                    "profile_info": None,
                 }
 
             return {
                 "success": True,
-                "profile_info": response.content
+                "profile_info": response.content.model_dump(),
             }
 
         return extract_profile_tool
