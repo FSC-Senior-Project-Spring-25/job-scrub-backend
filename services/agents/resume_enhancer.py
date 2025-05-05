@@ -1,14 +1,84 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
 
 from services.agents.base.agent import ReActAgent, AgentResponse
-from services.llm.base.llm import LLM, ResponseFormat
+from services.llm.base.llm import LLM
+
+
+class FormattingIssue(BaseModel):
+    type: str = Field(description="Type of issue (bullets, spacing, alignment, etc)")
+    severity: Literal["high", "medium", "low"] = Field(description="Severity level")
+    location: str = Field(description="Section or area where issue occurs")
+    description: str = Field(description="Detailed description of the issue")
+    fix: str = Field(description="Suggested fix for the issue")
+
+
+class FormattingAnalysis(BaseModel):
+    formatting_issues: List[FormattingIssue] = Field(default_factory=list)
+
+
+class ATSIssue(BaseModel):
+    type: str = Field(description="Issue type (headers, tables, images, fonts, etc)")
+    description: str = Field(description="Description of the issue")
+    impact: Literal["high", "medium", "low"] = Field(description="Impact level")
+
+
+class FormatCompatibility(BaseModel):
+    is_parseable: bool = Field(description="Whether the resume can be parsed by ATS")
+    issues: List[ATSIssue] = Field(default_factory=list)
+
+
+class ATSAnalysis(BaseModel):
+    format_compatibility: FormatCompatibility
+    recommendations: List[str] = Field(default_factory=list)
+
+
+class ImpactStatements(BaseModel):
+    strengths: List[str] = Field(default_factory=list)
+    weaknesses: List[str] = Field(default_factory=list)
+    examples_found: List[str] = Field(default_factory=list)
+
+
+class Clarity(BaseModel):
+    issues: List[str] = Field(default_factory=list)
+    improvements: List[str] = Field(default_factory=list)
+
+
+class Language(BaseModel):
+    professional_terms: List[str] = Field(default_factory=list)
+    weak_phrases: List[str] = Field(default_factory=list)
+
+
+class Relevance(BaseModel):
+    irrelevant_content: List[str] = Field(default_factory=list)
+
+
+class ContentQuality(BaseModel):
+    impact_statements: ImpactStatements
+    clarity: Clarity
+    language: Language
+    relevance: Relevance
+    recommendations: List[str] = Field(default_factory=list)
+
+
+# Root models for each tool response
+class FormattingResponse(BaseModel):
+    formatting_issues: List[FormattingIssue] = Field(default_factory=list)
+
+
+class ATSResponse(BaseModel):
+    ats_analysis: ATSAnalysis
+
+
+class ContentQualityResponse(BaseModel):
+    content_quality: ContentQuality
 
 
 class EnhancementState(MessagesState):
@@ -150,7 +220,6 @@ class ResumeEnhancementAgent(ReActAgent):
             self._create_analyze_formatting_tool(),
             self._create_ats_analysis_tool(),
             self._create_content_quality_tool(),
-            self._create_suggestions_tool()
         ]
         return tools
 
@@ -184,13 +253,13 @@ class ResumeEnhancementAgent(ReActAgent):
             response = self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=user_message,
-                response_format=ResponseFormat.JSON
+                response_format=FormattingResponse
             )
             print("Response from Gemini (formatting):", response)
             if not response.success:
                 raise ValueError(response.error)
 
-            issues = response.content.get("formatting_issues", [])
+            issues = response.content.formatting_issues
             return {"formatting_issues": issues}
 
         return analyze_formatting_tool
@@ -240,13 +309,13 @@ class ResumeEnhancementAgent(ReActAgent):
             response = self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=user_message,
-                response_format=ResponseFormat.JSON
+                response_format=ATSResponse
             )
             print("Response from Gemini (ATS):", response)
             if not response.success:
                 raise ValueError(response.error)
 
-            ats_results = response.content.get("ats_analysis", {})
+            ats_results = response.content.ats_analysis
             return {"ats_analysis": ats_results}
 
         return ats_analysis_tool
@@ -291,86 +360,16 @@ class ResumeEnhancementAgent(ReActAgent):
             response = self.llm.generate(
                 system_prompt=system_prompt,
                 user_message=user_message,
-                response_format=ResponseFormat.JSON
+                response_format=ContentQualityResponse
             )
             print("Response from Gemini (content quality):", response)
             if not response.success:
                 raise ValueError(response.error)
 
-            quality_assessment = response.content.get("content_quality", {})
+            quality_assessment = response.content.content_quality
             return {"content_quality": quality_assessment}
 
         return content_quality_tool
-
-    def _create_suggestions_tool(self):
-        @tool(parse_docstring=True)
-        def suggestions_tool(
-                formatting_issues: Optional[List[Dict[str, Any]]] = None,
-                ats_analysis: Optional[Dict[str, Any]] = None,
-                content_quality: Optional[Dict[str, Any]] = None
-        ) -> Dict[str, Any]:
-            """
-            Generate specific suggestions to improve the resume based on analysis results.
-            This tool can be called directly without requiring previous analysis.
-
-            Args:
-                formatting_issues: Previously identified formatting issues (optional)
-                ats_analysis: Results from ATS analysis (optional)
-                content_quality: Content quality assessment (optional)
-
-            Returns:
-                A dictionary containing specific improvement suggestions.
-            """
-            system_prompt = (
-                "You are a resume improvement expert. Based on the resume text and any available analysis results, "
-                "provide specific, actionable suggestions to improve the resume. "
-                "If previous analysis is not available, conduct your own analysis as part of generating suggestions. "
-                "Format your response as a JSON object with the following structure:\n"
-                "{\n"
-                '  "improvement_suggestions": [\n'
-                "    {\n"
-                '      "category": "string", // formatting, content, ats, or language\n'
-                '      "priority": "string", // high, medium, or low\n'
-                '      "current_state": "string", // Description of the current issue\n'
-                '      "suggested_change": "string", // Specific change to make\n'
-                '      "expected_impact": "string", // Expected improvement after change\n'
-                '      "section": "string" // Resume section this applies to\n'
-                "    }\n"
-                "  ]\n"
-                "}"
-            )
-
-            # Create a structured analysis summary for the LLM
-            analysis_summary = {}
-            if formatting_issues:
-                analysis_summary["formatting_issues"] = formatting_issues
-            if ats_analysis:
-                analysis_summary["ats_analysis"] = ats_analysis
-            if content_quality:
-                analysis_summary["content_quality"] = content_quality
-
-            user_message = f"Resume text:\n{self.resume_text}\n\n"
-
-            if analysis_summary:
-                user_message += f"Analysis results:\n{json.dumps(analysis_summary, indent=2)}\n\n"
-            else:
-                user_message += "No previous analysis available. Please analyze the resume and provide suggestions directly.\n\n"
-
-            user_message += "Please provide specific suggestions for improvement."
-
-            response = self.llm.generate(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                response_format=ResponseFormat.JSON
-            )
-            print("Response from Gemini (suggestions):", response)
-            if not response.success:
-                raise ValueError(response.error)
-
-            suggestions = response.content.get("improvement_suggestions", [])
-            return {"improvement_suggestions": suggestions}
-
-        return suggestions_tool
 
     def think(self, state: EnhancementState) -> Dict[str, Any]:
         """
@@ -403,9 +402,7 @@ class ResumeEnhancementAgent(ReActAgent):
             content=(
                 "You are a resume enhancement assistant focused on targeted analysis. "
                 "Choose tools based on what the user is specifically asking for. "
-                "Important: You do NOT need to execute tools in a specific sequence. "
-                "You can call any tool directly based on what's needed, including the suggestions_tool "
-                "without requiring prior analysis tools."
+                "You can call any tool directly based on what's needed. "
                 "\n\n"
                 f"User Prompt: {prompt}"
             )
