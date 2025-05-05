@@ -65,16 +65,15 @@ async def create_supervisor_agent(
 
     # Create and return the supervisor agent
     supervisor = SupervisorAgent(
-        llm=llm,
         pc=pinecone_client,
         resume_matcher=agents["resume_matcher"],
         resume_enhancer=agents["resume_enhancer"],
         user_profile_agent=agents["user_profile"],
         job_search_agent=agents["job_search"],
         user_search_agent=agents["user_search"],
-        resume_data=resume_data,
-        processed_conversation_history=history,
-        processed_files=[processed_file] if processed_file else None,
+        resume_text=resume_data["text"],
+        conversation_history=history,
+        files=[processed_file] if processed_file else None,
     )
 
     return supervisor
