@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
@@ -17,13 +16,10 @@ from services.agents.job_search_agent import JobSearchAgent
 from services.agents.resume_enhancer import ResumeEnhancementAgent
 from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.chat_handler import handle_chat
-from services.agents.tools.get_user_resume import get_user_resume
 from services.agents.user_profile_agent import UserProfileAgent
 from services.agents.user_search_agent import UserSearchAgent
 from services.llm.base.llm import LLM
 from services.llm.gemini import GeminiLLM
-from services.resume_parser import ResumeParser
-from services.text_embedder import TextEmbedder
 
 load_dotenv()
 
@@ -51,7 +47,7 @@ class SupervisorState:
     active_agents: List[str]
     files: Optional[List[Dict[str, Any]]] = None
     agent_results: Dict[str, AgentResponse] = None
-    final_response: Optional[str] = None
+    final_response: str = ""
     error: Optional[str] = None
 
 
@@ -123,14 +119,34 @@ class SupervisorAgent:
                         chat_resp = current_state.agent_results["chat"]
                         text = chat_resp.answer if isinstance(chat_resp, AgentResponse) else str(chat_resp)
                         yield {"type": "content_chunk", "content": text}
-                        current_state.final_response = text
+                        current_state.final_response = text  # Make sure this is a string
+
+                        # Add the messages to conversation history directly
+                        ts = int(datetime.utcnow().timestamp())
+                        current_state.conversation_history.append(Message(
+                            role="user",
+                            content=current_state.current_message,
+                            timestamp=ts
+                        ))
+                        current_state.conversation_history.append(Message(
+                            role="assistant",
+                            content=text,
+                            timestamp=ts,
+                            activeAgents=current_state.active_agents
+                        ))
                     else:
                         # Update state with execute results
                         for k, v in output["execute"].items():
                             setattr(current_state, k, v)
+
                         # Stream synthesized response
                         async for chunk in self._stream_synthesize_response(current_state):
                             yield {"type": "content_chunk", "content": chunk}
+
+                        # Ensure final_response is set after streaming completes
+                        if not current_state.final_response:
+                            print("[SUPERVISOR] Warning: final_response is empty after streaming")
+                            current_state.final_response = "I apologize, but I couldn't generate a proper response."
 
                 elif node_name == "update":
                     # Update final state
@@ -144,7 +160,7 @@ class SupervisorAgent:
                                 "role": m.role,
                                 "content": m.content,
                                 "timestamp": m.timestamp,
-                                "metadata": m.metadata,
+                                "metadata": m.metadata if hasattr(m, "metadata") else {},
                             }
                             for m in current_state.conversation_history
                         ],
@@ -157,9 +173,9 @@ class SupervisorAgent:
         We are using a multi‑agent system, so multiple agents can be activated simultaneously.
 
         User message: "{state.current_message}"
-        
+
         HISTORY: {json.dumps([m.content for m in state.conversation_history[-2:]])}
-        
+
         Choose the most relevant agents based on the user message and conversation history.
         Available agents:
         - RESUME_MATCHER: For questions about job fit, matching resumes to jobs, or compatibility with positions
@@ -208,19 +224,24 @@ class SupervisorAgent:
 
         # Pair agent names with results
         for (agent, _), result in zip(agent_tasks, results):
-            state.agent_results[agent.lower()] = result if not isinstance(result, Exception) else AgentResponse(answer="", error=str(result))
+            state.agent_results[agent.lower()] = result if not isinstance(result, Exception) else AgentResponse(answer="Error occurred", error=str(result))
 
         return state
 
     async def _update_conversation(self, state: SupervisorState) -> Dict[str, Any]:
-        ts = datetime.utcnow().isoformat()
+        ts = int(datetime.utcnow().timestamp())
+
+        # Ensure we have a valid final_response
+        if state.final_response is None:
+            state.final_response = "No response generated"
+
         state.conversation_history.append(Message(role="user", content=state.current_message, timestamp=ts))
         state.conversation_history.append(
             Message(
                 role="assistant",
-                content=state.final_response,
+                content=state.final_response,  # This should now always be a string
                 timestamp=ts,
-                metadata={"agents": [a.lower() for a in state.active_agents]},
+                activeAgents=state.active_agents,
             )
         )
         return state.__dict__
@@ -230,12 +251,24 @@ class SupervisorAgent:
         print(f"[SUPERVISOR] Synthesizing response with data: {json.dumps(serialised, indent=2)}")
         prompt = f"""
         Provide a concise markdown answer to the user's query using only the relevant data below.
+        Preserve links and any other relevant information.
         USER: {state.current_message}
         RESULTS: {json.dumps(serialised, indent=2)}
         """
+        buffer = ""  # keep track of what we've already sent
         async for chunk in self.llm.generate_stream("Assistant", prompt):
-            state.final_response = (state.final_response or "") + chunk
-            yield chunk
+            # ----------  NEWLINES GUARD‑RAIL  ----------
+            if chunk.startswith("- ") and not buffer.endswith("\n"):
+                chunk = "\n" + chunk  # ensure list starts on its own line
+            # bold delimiters sometimes appear with a spurious space before the
+            # closing ** → strip that out as well
+            if chunk.endswith(" **"):
+                chunk = chunk[:-1]  # remove that extra space
+            # -------------------------------------------
+
+            buffer += chunk
+            state.final_response = buffer  # Update final_response with each chunk
+            yield chunk  # keep the stream flowing
 
     def _create_workflow(self) -> CompiledStateGraph:
         builder = StateGraph(SupervisorState)
