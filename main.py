@@ -14,7 +14,6 @@ from starlette.middleware.cors import CORSMiddleware
 
 from context import RequestContextMiddleware
 from dependencies import S3, Firestore
-from routes.auth import router as auth_router
 from routes.chat import router as chat_router
 from routes.follows import router as follows_router
 from routes.jobs import router as jobs_router
@@ -97,7 +96,6 @@ app.include_router(jobs_router, prefix="/job", tags=["jobs"])
 app.include_router(resume_router, prefix="/resume", tags=["resume"])
 app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(posts_router, prefix="/posts", tags=["posts"])
-app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(user_search_router, prefix="/users")
 app.include_router(follows_router, prefix="/users", tags=["follows"])
 
