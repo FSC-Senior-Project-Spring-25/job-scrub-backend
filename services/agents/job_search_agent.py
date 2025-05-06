@@ -6,9 +6,26 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
 
 from services.agents.base.agent import ReActAgent, AgentResponse
 from services.llm.base.llm import LLM
+
+
+class JobFilterParams(BaseModel):
+    """Schema for job search filter parameters."""
+    title: Optional[str] = Field(None, description="Exact job title to match")
+    company: Optional[str] = Field(None, description="Exact company name to match")
+    job_types: Optional[List[str]] = Field(None, description="Job types (fulltime, parttime, internship, contract, volunteer)")
+    location_types: Optional[List[str]] = Field(None, description="Location types (remote, onsite, hybrid)")
+    min_date: Optional[str] = Field(None, description="Minimum date in YYYY-MM-DD format")
+    max_date: Optional[str] = Field(None, description="Maximum date in YYYY-MM-DD format")
+    skills: Optional[List[str]] = Field(None, description="Required skills to filter jobs")
+    benefits: Optional[List[str]] = Field(None, description="Required benefits to filter jobs")
+    min_salary: Optional[str] = Field(None, description="Minimum salary filter")
+    max_salary: Optional[str] = Field(None, description="Maximum salary filter")
+    location_address: Optional[str] = Field(None, description="Location substring to match")
+    top_k: Optional[int] = Field(5, description="Number of results to return")
 
 
 class JobSearchState(MessagesState):
@@ -54,24 +71,88 @@ class JobSearchAgent(ReActAgent):
         sys_msg = SystemMessage(content=self._get_system_prompt())
         new_messages: List[BaseMessage] = [sys_msg] + messages
 
-        # if we have job_results, handle summary or no-match
         if new_state.get("job_results") is not None:
             if not new_state["job_results"]:
-                new_messages.append(HumanMessage(content="I’m sorry, I couldn’t find any jobs matching your criteria."))
+                new_messages.append(HumanMessage(content="I couldn't find any job postings matching your criteria."))
                 new_state["messages"] = messages + [new_messages[-1]]
                 return new_state
-            # summarize found jobs
+            # Summarize found jobs
             invocation = self.llm_with_tools.invoke(new_messages)
             new_state["messages"] = messages + [invocation]
             return new_state
 
-        # first turn: instruct tool call with filters
-        new_messages.append(
-            HumanMessage(content=(
-                f"Use the search_jobs tool to find the top job postings matching: '{prompt}'. "
-                "You may pass filter arguments like locationType or jobType to narrow results."
-            ))
-        )
+        # First turn: preprocess query with LLM to create intelligent filters
+        if not any(hasattr(msg, 'tool_call_id') for msg in messages):
+            # Extract relevant skills and job criteria from the prompt
+            try:
+                filter_prompt = f"""
+                Extract relevant job search filters from this query: "{prompt}"
+
+                For a Computer Science major, consider these filter parameters:
+                1. Job titles related to computer science (Software Engineer, Data Scientist, etc.)
+                2. Skills that would be relevant (programming languages, frameworks, etc.)
+                3. Job types that would be appropriate (fulltime, internship, etc.)
+                4. Location preferences (remote, hybrid, onsite, specific location)
+                5. Company names mentioned
+                6. Benefits that might be important
+                7. Salary expectations if mentioned
+                8. Date ranges for job postings if mentioned
+
+                Return ONLY a structured JSON object with these fields (leave empty if not specified):
+                {{
+                    "title": "exact job title",
+                    "company": "exact company name",
+                    "job_types": ["fulltime", "parttime", "internship", "contract", "volunteer"],
+                    "location_types": ["remote", "onsite", "hybrid"],
+                    "min_date": "YYYY-MM-DD",
+                    "max_date": "YYYY-MM-DD",
+                    "skills": ["skill1", "skill2"],
+                    "benefits": ["benefit1", "benefit2"],
+                    "min_salary": "min salary as string",
+                    "max_salary": "max salary as string",
+                    "location_address": "location substring",
+                    "top_k": 5
+                }}
+                """
+
+                filter_response = self.llm.generate(
+                    system_prompt="You are a job search filter generator that extracts structured search criteria from natural language queries about computer science jobs.",
+                    user_message=filter_prompt,
+                    response_format=JobFilterParams
+                )
+
+                if filter_response.success:
+                    # Use filter_response.content directly as it's already a JobFilterParams instance
+                    filters = filter_response.content
+
+                    # Log the extracted filters
+                    print(f"[JOB_SEARCH] Extracted filters: {filters}")
+
+                    # Create tool call instruction with intelligent filters
+                    filter_instructions = ""
+                    if filters.skills:
+                        filter_instructions += f"\nSkills to filter by: {', '.join(filters.skills)}"
+                    if filters.title:
+                        filter_instructions += f"\nPossible job title: {filters.title}"
+                    if filters.job_types:
+                        filter_instructions += f"\nJob types to consider: {', '.join(filters.job_types)}"
+                    if filters.location_types:
+                        filter_instructions += f"\nLocation types to consider: {', '.join(filters.location_types)}"
+
+                    instruction = (
+                        f"Use the search_jobs tool to find jobs matching: '{prompt}'. {filter_instructions}\n"
+                        f"Use these filters to construct an appropriate search query."
+                    )
+                else:
+                    # Fall back to generic instruction if LLM fails
+                    instruction = f"Use the search_jobs tool to find jobs matching: '{prompt}'. Consider focusing on computer science related positions."
+
+            except Exception as e:
+                print(f"[JOB_SEARCH] Error in filter preprocessing: {str(e)}")
+                instruction = f"Use the search_jobs tool to find jobs matching: '{prompt}'."
+
+            new_messages.append(HumanMessage(content=instruction))
+
         # invoke function-calling
         invocation = self.llm_with_tools.invoke(new_messages)
         new_state["messages"] = messages + [invocation]
