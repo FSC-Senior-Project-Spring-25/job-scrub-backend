@@ -40,7 +40,6 @@ async def get_current_user(request: Request) -> User:
     try:
         # Verify the Firebase ID token
         decoded_token = verify_id_token(token)
-        print(f"Decoded token: {decoded_token}")
         return User(
             user_id=decoded_token["uid"],
             email=decoded_token["email"],

@@ -1,11 +1,11 @@
 import json
-from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
-from fastapi import APIRouter, Form, UploadFile, File
+from fastapi import APIRouter, Form, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 
-from dependencies import Parser, CurrentUser, PineconeClient
+from dependencies import Parser, CurrentUser, PineconeClient, Firestore
+from models.chat import Conversation, ConversationCreate, ConversationUpdate
 from services.agents.supervisor_agent import SupervisorAgent
 from services.agents.tools.create_supervisor_agent import create_supervisor_agent
 
@@ -14,12 +14,35 @@ router = APIRouter()
 
 async def generate_stream_response(supervisor: SupervisorAgent, user_id: str, message: str):
     """Generate a streaming response from the supervisor agent"""
+
+    # Variable to store the complete response for final update
+    complete_response = ""
+
     try:
-        async for chunk in supervisor.process_message(user_id=user_id, message=message):
-            yield f"data: {json.dumps(chunk)}\n\n"
+        async for chunk in supervisor.process_message(
+                user_id=user_id, message=message
+        ):
+            # we only stream *assistant text* inside delta.content
+            if chunk["type"] == "content_chunk":
+                # Accumulate the full response
+                complete_response += chunk["content"]
+                payload = {"choices": [{"delta": {"content": chunk["content"]}}]}
+            else:  # forward metadata once at the top
+                payload = {"event": chunk["type"], **chunk}
+
+                # If it's a completion event, make sure we include the full content
+                if chunk["type"] == "complete" and "conversation" in chunk:
+                    # Find and update the assistant message with complete_response
+                    for msg in chunk["conversation"]:
+                        if msg["role"] == "assistant" and msg["content"] is None:
+                            msg["content"] = complete_response
+
+            yield f"data: {json.dumps(payload)}\n\n"
+
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        err = {"choices": [{"delta": {}}], "error": str(e)}
+        yield f"data: {json.dumps(err)}\n\n"
 
 
 @router.post("")
@@ -71,44 +94,80 @@ async def chat(
         )
 
 
-@router.get("/conversations")
+@router.post("/conversations", response_model=Conversation)
+async def create_conversation(
+        data: ConversationCreate,
+        current_user: CurrentUser,
+        pinecone: PineconeClient,
+        db: Firestore
+):
+    """Create a new conversation"""
+    # Convert messages to dictionaries for storage
+    messages_dict = [message.model_dump() for message in data.messages]
+
+    # Create the conversation in Firestore
+    conversation = db.create_conversation(
+        user_id=current_user.user_id,
+        first_message=data.firstMessage,
+        messages=messages_dict
+    )
+
+    return conversation
+
+
+@router.get("/conversations", response_model=List[Conversation])
 async def get_conversations(
         current_user: CurrentUser,
+        db: Firestore
 ):
-    """
-    Get list of user's conversations
-
-    Args:
-        current_user: Authenticated user info
-
-    Returns:
-        List of conversation summaries
-    """
-    # This would typically fetch from a database
-    # For now, return an empty list as placeholder
-    return {"conversations": []}
+    """Get all conversations for the current user"""
+    conversations = db.get_user_conversations(current_user.user_id)
+    return conversations
 
 
-@router.get("/conversations/{conversation_id}")
+@router.get("/conversations/{conversation_id}", response_model=Conversation)
 async def get_conversation(
         conversation_id: str,
         current_user: CurrentUser,
+        db: Firestore
 ):
-    """
-    Get a specific conversation history
+    """Get a specific conversation"""
+    conversation = db.get_conversation(conversation_id, current_user.user_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
 
-    Args:
-        conversation_id: Conversation identifier
-        current_user: Authenticated user info
 
-    Returns:
-        Complete conversation history
-    """
-    # This would typically fetch from a database
-    # For now, return an empty conversation as placeholder
-    return {
-        "conversation_id": conversation_id,
-        "messages": [],
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat()
-    }
+@router.put("/conversations/{conversation_id}", response_model=Conversation)
+async def update_conversation(
+        data: ConversationUpdate,
+        conversation_id: str,
+        current_user: CurrentUser,
+        db: Firestore
+):
+    """Update a conversation"""
+    # Convert messages to dictionaries for storage
+    messages_dict = [message.dict() for message in data.messages]
+
+    conversation = db.update_conversation(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        messages=messages_dict
+    )
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+        conversation_id: str,
+        current_user: CurrentUser,
+        db: Firestore
+):
+    """Delete a conversation"""
+    success = db.delete_conversation(conversation_id, current_user.user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"message": "Conversation deleted successfully"}

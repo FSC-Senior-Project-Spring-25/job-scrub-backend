@@ -1,11 +1,24 @@
-from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Optional, List
+
+from pydantic import BaseModel
 
 
-@dataclass
-class Message:
-    """Message in the conversation history"""
-    role: str  # 'user' or 'assistant'
+class Message(BaseModel):
+    role: str
     content: str
-    timestamp: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: Optional[int] = None
+    resumeFile: Optional[dict] = None
+    activeAgents: Optional[List[str]] = None
+
+class ConversationCreate(BaseModel):
+    firstMessage: str
+    messages: List[Message]
+
+class ConversationUpdate(BaseModel):
+    messages: List[Message]
+
+class Conversation(BaseModel):
+    id: str
+    firstMessage: str
+    lastMessageTimestamp: int
+    messages: List[Message]
