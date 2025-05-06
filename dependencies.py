@@ -39,7 +39,7 @@ async def get_current_user(request: Request) -> User:
     token = authorization.split("Bearer ")[1]
     try:
         # Verify the Firebase ID token
-        decoded_token = verify_id_token(token)
+        decoded_token = verify_id_token(token, check_revoked=True, clock_skew_seconds=10)
         return User(
             user_id=decoded_token["uid"],
             email=decoded_token["email"],
