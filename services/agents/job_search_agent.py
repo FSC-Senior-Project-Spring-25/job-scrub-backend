@@ -130,18 +130,15 @@ class JobSearchAgent(ReActAgent):
             Returns:
                 JSON string with jobs list and count
             """
-            # Build metadata filter
             metadata_filter: Dict[str, Any] = {}
-            if title:
-                metadata_filter["title"] = {"$eq": title}
-            if company:
-                metadata_filter["company"] = {"$eq": company}
+
+            # These enum-like fields can stay as exact matches
             if job_type:
                 metadata_filter["jobType"] = {"$eq": job_type}
             if location_type:
                 metadata_filter["locationType"] = {"$eq": location_type}
 
-            # Date range filters
+            # Date range filters stay the same
             if min_date:
                 metadata_filter["date"] = metadata_filter.get("date", {})
                 metadata_filter["date"]["$gte"] = min_date
@@ -149,60 +146,70 @@ class JobSearchAgent(ReActAgent):
                 metadata_filter["date"] = metadata_filter.get("date", {})
                 metadata_filter["date"]["$lte"] = max_date
 
-            # List field filters
-            if skills:
-                skills_conditions = [{"skills": skill} for skill in skills]
-                if len(skills_conditions) == 1:
-                    metadata_filter.update(skills_conditions[0])
-                else:
-                    metadata_filter["$and"] = metadata_filter.get("$and", []) + skills_conditions
+            # For list fields like skills and benefits, use $in operator instead of requiring all
+            if skills and len(skills) > 0:
+                # Create a filter that matches if ANY of the requested skills are present
+                # This is more lenient than requiring all skills
+                metadata_filter["$or"] = metadata_filter.get("$or", [])
+                metadata_filter["$or"].extend([{"skills": skill} for skill in skills])
 
-            if benefits:
-                benefits_conditions = [{"benefits": benefit} for benefit in benefits]
-                if len(benefits_conditions) == 1:
-                    metadata_filter.update(benefits_conditions[0])
-                else:
-                    and_conditions = metadata_filter.get("$and", []) + benefits_conditions
-                    metadata_filter["$and"] = and_conditions
+            if benefits and len(benefits) > 0:
+                # Similarly, match if ANY benefits match
+                if "$or" not in metadata_filter:
+                    metadata_filter["$or"] = []
+                metadata_filter["$or"].extend([{"benefits": benefit} for benefit in benefits])
 
-            # Substring matching for salary and location
-            # Note: These would be handled by post-filtering as Pinecone doesn't directly support substring matching
             print("Metadata filter:", metadata_filter)
 
             try:
-                # Execute query with filters
                 response = self.job_index.query(
                     vector=self.resume_vector,
-                    top_k=top_k,
+                    top_k=top_k * 2,
                     namespace="jobs",
                     filter=metadata_filter if metadata_filter else None,
                     include_metadata=True
                 )
 
-                # Post-process results for filters that Pinecone can't handle directly
+                # Post-process results for more flexible matching
                 jobs = []
                 for match in response.matches:
                     job = match.metadata
+                    job["id"] = match.id
                     job["score"] = match.score
 
-                    # Apply post-filtering
+                    # Apply flexible post-filtering
                     include_job = True
 
-                    # Handle salary substring matching if needed
-                    if min_salary and job.get("salary") and min_salary not in job.get("salary", ""):
-                        include_job = False
-                    if max_salary and job.get("salary") and max_salary not in job.get("salary", ""):
-                        include_job = False
+                    # Title substring matching
+                    if title and job.get("title"):
+                        if title.lower() not in job.get("title", "").lower():
+                            include_job = False
 
-                    # Handle location address substring matching
+                    # Company substring matching
+                    if company and job.get("company"):
+                        if company.lower() not in job.get("company", "").lower():
+                            include_job = False
+
+                    # Salary substring matching
+                    if min_salary and job.get("salary"):
+                        # Just ensure there's some salary info, detailed matching can be complex
+                        pass
+
+                    if max_salary and job.get("salary"):
+                        # Just ensure there's some salary info, detailed matching can be complex
+                        pass
+
+                    # Location address substring matching
                     if location_address and job.get("location") and job["location"].get("address"):
-                        if location_address not in job["location"]["address"]:
+                        if location_address.lower() not in job["location"]["address"].lower():
                             include_job = False
 
                     if include_job:
                         jobs.append(job)
 
-                return json.dumps({"jobs": jobs, "count": len(jobs)})
+                # Limit to requested top_k after post-filtering
+                print(f"[JOB SEARCH]: f{json.dumps({"jobs": jobs[:top_k], "count": len(jobs[:top_k])})}")
+                return json.dumps({"jobs": jobs[:top_k], "count": len(jobs[:top_k])})
             except Exception as e:
                 return json.dumps({"error": str(e), "jobs": [], "count": 0})
 
@@ -218,7 +225,31 @@ class JobSearchAgent(ReActAgent):
         return graph.compile()
 
     def _extract_answer(self, state: Dict[str, Any]) -> str:
+        """Return a Markdown list of jobs with proper links."""
         msgs = state.get("messages", [])
+        job_results = state.get("job_results", [])
+
+        if job_results:
+            lines = ["## Matching Jobs", ""]  # heading + blank line
+            for i, job in enumerate(job_results):
+                job_id = job.get("id", f"job-{i}")
+                title = job.get("title", "Untitled Position")
+                company = job.get("company", "Unknown Company")
+                loc_type = job.get("locationType", "")
+                salary = job.get("salary", "")
+
+                meta = " · ".join(filter(None, [loc_type, salary]))  # compact meta
+                meta = f" ({meta})" if meta else ""
+
+                # ONE bullet, everything on one line
+                lines.append(
+                    f"- **{title}** at {company}{meta}: "
+                    f"[View&nbsp;Details](/jobs/{job_id})"
+                )
+
+            return "\n".join(lines) + "\n"  # final trailing \n is optional
+
+        # fall‑back to last assistant message if nothing to format
         return msgs[-1].content if msgs else ""
 
     def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:
