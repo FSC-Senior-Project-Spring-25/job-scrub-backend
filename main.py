@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi_injectable import register_app, cleanup_all_exit_stacks
 from firebase_admin import credentials
+from mangum import Mangum
 from pinecone import Pinecone
 from starlette.middleware.cors import CORSMiddleware
 
@@ -98,4 +99,4 @@ app.include_router(chat_router, prefix="/chat", tags=["chat"])
 app.include_router(posts_router, prefix="/posts", tags=["posts"])
 app.include_router(user_search_router, prefix="/users")
 app.include_router(follows_router, prefix="/users", tags=["follows"])
-
+handler = Mangum(app)
