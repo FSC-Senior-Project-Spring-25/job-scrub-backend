@@ -6,9 +6,21 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
 
 from services.agents.base.agent import ReActAgent, AgentResponse
 from services.llm.base.llm import LLM
+
+
+class ResumeProfile(BaseModel):
+    """Schema for structured resume profile information."""
+    name: str = Field(default="Candidate", description="Person's full name")
+    title: str = Field(default="Professional", description="Current or most recent job title")
+    skills: List[str] = Field(default_factory=list, description="Key professional skills")
+    education: Optional[str] = Field(None, description="Highest education level and field")
+    experience_years: Optional[int] = Field(None, description="Total years of professional experience")
+    industry: Optional[str] = Field(None, description="Primary industry of expertise")
+    contact_info: Optional[str] = Field(None, description="Email, phone, or other contact information")
 
 
 class UserSearchState(MessagesState):
@@ -94,65 +106,67 @@ class UserSearchAgent(ReActAgent):
         def search_users(
                 top_k: int = 5,
                 keywords: Optional[List[str]] = None,
-                text_contains: Optional[str] = None,
+                text_contains: Optional[str] = None
         ) -> str:
             """
             Search for users with resumes similar to the query vector with optional metadata filtering.
 
             Args:
                 top_k: Number of results to return (default: 5)
-                keywords: List of keywords; matches any resume containing at least one keyword
+                keywords: List of keywords to search for in the user's resume
                 text_contains: Text that must appear somewhere in the resume (post-filtered)
 
             Returns:
                 JSON string with users list and count
             """
-            # Build a more tolerant metadata filter
+            # Build metadata filter for keywords
             metadata_filter: Dict[str, Any] = {}
-            if keywords:
-                # match any resume whose `keywords` metadata array contains at least one of the requested keywords
+
+            # For keywords, use $in operator to match any resume containing at least one keyword
+            if keywords and len(keywords) > 0:
                 metadata_filter["keywords"] = {"$in": keywords}
 
-            # First attempt: vector + metadata filter
-            def _run_query(filter_expr):
-                return self.resume_index.query(
+            print(f"[USER SEARCH]: Using metadata filter: {metadata_filter}")
+
+            try:
+                # Query with vector similarity, fetch more to allow for post-filtering
+                response = self.resume_index.query(
                     vector=self.resume_vector,
-                    top_k=top_k,
+                    top_k=top_k * 2,  # Fetch more to allow for post-filtering
                     namespace="resumes",
-                    filter=filter_expr,
+                    filter=metadata_filter if metadata_filter else None,
                     include_metadata=True
                 )
 
-            # try with filter, but if no matches come back, drop the filter entirely
-            response = _run_query(metadata_filter if metadata_filter else None)
-            if not response.matches and metadata_filter:
-                # fallback to pure vector search
-                response = _run_query(None)
+                # Post-process results
+                users = []
+                for match in response.matches:
+                    # Extract basic user data
+                    user_data = {
+                        "user_id": match.id,
+                        "score": match.score,
+                        "keywords": match.metadata.get("keywords", []),
+                        "file_id": match.metadata.get("file_id", ""),
+                        "text": match.metadata.get("text", ""),
+                    }
 
-            print(f"Search results: {response.matches}")
-            users = []
-            for match in response.matches:
-                user_data = {
-                    "user_id": match.id,
-                    "score": match.score,
-                    "keywords": match.metadata.get("keywords", []),
-                    "file_id": match.metadata.get("file_id", ""),
-                }
+                    # Post-filtering for text content
+                    include_user = True
+                    full_text = match.metadata.get("text", "")
 
-                # summarize the text field if present
-                full_text = match.metadata.get("text", "")
-                user_data["text_summary"] = (
-                    full_text[:200] + "..." if len(full_text) > 200 else full_text
-                )
+                    # Text contains filtering - case insensitive
+                    if text_contains and text_contains.lower() not in full_text.lower():
+                        include_user = False
 
-                # post-filter for text_contains
-                if text_contains:
-                    if text_contains.lower() not in full_text.lower():
-                        continue
+                    if include_user:
+                        users.append(user_data)
 
-                users.append(user_data)
+                print(f"[USER SEARCH]: {len(users)} users found after filtering")
+                return json.dumps({"users": users[:top_k], "count": len(users[:top_k])})
 
-            return json.dumps({"users": users, "count": len(users)})
+            except Exception as e:
+                print(f"[USER SEARCH ERROR]: {str(e)}")
+                return json.dumps({"error": str(e), "users": [], "count": 0})
 
         return [search_users]
 
@@ -166,28 +180,97 @@ class UserSearchAgent(ReActAgent):
         return graph.compile()
 
     def _extract_answer(self, state: Dict[str, Any]) -> str:
+        """
+        Return a Markdown list of users with structured profile information and links.
+        Uses LLM to extract profile details from resume text when available.
+        """
         msgs = state.get("messages", [])
-        base_answer = msgs[-1].content if msgs else ""
+        user_results = state.get("user_results", [])
 
-        # Check if we have user results with text summaries to include
-        user_results = state.get("user_results")
-        if user_results:
-            # Extract text summaries
-            summaries = []
-            for idx, user in enumerate(user_results[:5], 1):  # Limit to first 5 users
-                if "text_summary" in user:
-                    summary = user["text_summary"]
-                    # Truncate if too long
-                    if len(summary) > 200:
-                        summary = summary[:200] + "..."
-                    summaries.append(f"**User {idx}**: {summary}")
+        if not user_results:
+            return msgs[-1].content if msgs else ""
 
-            # Add summaries to the answer if available
-            if summaries:
-                summary_section = "\n\n**Resume Summaries**:\n" + "\n\n".join(summaries)
-                return base_answer + summary_section
+        lines = ["## Matching Candidates", ""]
 
-        return base_answer
+        for i, user in enumerate(user_results):
+            user_id = user.get("user_id", f"user-{i}")
+            keywords = user.get("keywords", [])
+
+            # Important: Get the full resume text - this is what was missing before
+            full_text = user.get("text", "")
+
+            # Default values in case LLM fails
+            name = "User"
+            title = None
+            skills = keywords[:5] if keywords else []
+            contact = "Contact via profile"
+            education = None
+            experience = None
+
+            # Only invoke LLM if we have text to analyze
+            if full_text:
+                try:
+                    prompt = f"""
+                    Extract key professional information from this resume excerpt:
+
+                    {full_text[:1500]}
+
+                    Keywords found in metadata: {', '.join(keywords) if keywords else 'None'}
+                    """
+
+                    # Actually call the LLM
+                    response = self.llm.generate(
+                        system_prompt="You are an expert resume analyst. Extract structured information including contact details.",
+                        user_message=prompt,
+                        response_format=ResumeProfile
+                    )
+
+                    print(f"[USER_SEARCH] LLM response: {response.success}, content: {response.content}")
+
+                    if response.success:
+                        profile = response.content
+                        name = profile.name if profile.name != "Candidate" else "Professional Candidate"
+                        title = profile.title if profile.title != "Professional" else "Skilled Professional"
+                        skills = profile.skills if profile.skills else keywords[:5]
+                        contact = profile.contact_info if profile.contact_info else "Contact via profile"
+                        education = profile.education
+                        experience = f"{profile.experience_years} years" if profile.experience_years else None
+                except Exception as e:
+                    print(f"[USER_SEARCH] Error extracting profile from LLM: {str(e)}")
+
+            # Format skills as a comma-separated list
+            skills_str = ", ".join(skills[:5])
+            if len(skills) > 5:
+                skills_str += "..."
+
+            # Build a more informative and structured candidate entry
+            entry = [f"### {name}"]
+
+            # Title on one line
+            if title:
+                entry.append(f"**{title}** ")
+
+            # Skills section
+            entry.append(f"**Skills**: {skills_str}")
+
+            # Optional sections when available
+            if education:
+                entry.append(f"**Education**: {education}")
+
+            if experience:
+                entry.append(f"**Experience**: {experience}")
+
+            if contact and contact != "Contact via profile":
+                entry.append(f"**Contact**: {contact}")
+
+            # Add profile link
+            entry.append(f"[View Full Profile](/profile/{user_id})")
+
+            # Add all lines with proper spacing
+            lines.extend(entry)
+            lines.append("")  # Add spacing between candidates
+
+        return "\n".join(lines)
 
     def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:
         meta = {"agent_type": "user_search"}
