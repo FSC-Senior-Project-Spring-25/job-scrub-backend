@@ -4,7 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from starlette.responses import JSONResponse
 
-from dependencies import MatchingAgent, S3, Parser, LLM, PineconeClient, Embedder, CurrentUser
+from dependencies import S3, Parser, PineconeClient, Embedder, CurrentUser
+from services.agents.resume_matcher import ResumeMatchingAgent
 from services.agents.tools.extract_keywords import extract_keywords
 
 router = APIRouter()
@@ -12,7 +13,8 @@ router = APIRouter()
 
 @router.post("/match")
 async def calculate_resume_similarity(
-        matching_agent: MatchingAgent,
+        resume_parser: Parser,
+        embedder: Embedder,
         resume_file: Annotated[UploadFile, File(alias="resumeFile", validation_alias="resumeFile")],
         job_description: str = Form(
             ...,
@@ -32,11 +34,16 @@ async def calculate_resume_similarity(
 
         # Read the PDF bytes
         file_bytes = await resume_file.read()
+        resume_text = resume_parser.parse_pdf(file_bytes)
 
+        matching_agent = ResumeMatchingAgent(
+            embedder=embedder,
+            resume_text=resume_text,
+        )
         # Process using the matching agent
-        result = await matching_agent.analyze_resume(file_bytes, job_description)
+        result = await matching_agent.invoke(job_description)
 
-        return result
+        return result.answer
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -46,7 +53,6 @@ async def calculate_resume_similarity(
 async def upload_resume(
         s3_service: S3,
         parser: Parser,
-        llm: LLM,
         pinecone: PineconeClient,
         embedder: Embedder,
         current_user: CurrentUser,
@@ -70,7 +76,7 @@ async def upload_resume(
             text = parser.parse_pdf(file_bytes)
 
             # Run text processing tasks concurrently
-            keywords_task = extract_keywords(text, llm)
+            keywords_task = extract_keywords(text)
             embeddings_task = embedder.get_embeddings([text])
             upload_task = s3_service.upload_file(
                 file=file,
@@ -138,6 +144,7 @@ async def view_resume(
 @router.delete("/delete")
 async def delete_resume(
         s3_service: S3,
+        pc: PineconeClient,
         key: str,
         current_user: CurrentUser,
 ):
@@ -147,11 +154,28 @@ async def delete_resume(
     if not key.startswith(f"resumes/{user_id}/"):
         raise HTTPException(status_code=403, detail="Not authorized to delete this file")
 
-    if await s3_service.delete_file(key):
-        return JSONResponse(content={"success": True})
+    try:
+        # Delete file from S3
+        s3_deleted = await s3_service.delete_file(key)
 
-    # Must have failed to delete
-    raise HTTPException(status_code=500, detail="Failed to delete file")
+        # Delete vector from Pinecone
+        resume_index = pc.Index("resumes")
+        resume_index.delete(ids=[user_id], namespace="resumes")
+
+        if not s3_deleted:
+            # If S3 deletion failed but Pinecone succeeded, return partial success
+            return JSONResponse(
+                status_code=207,
+                content={
+                    "success": False,
+                    "message": "File deleted from Pinecone but failed to delete from storage"
+                }
+            )
+
+        return JSONResponse(content={"success": True, "message": "Resume deleted successfully"})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete resume: {str(e)}")
 
 
 @router.get("/keywords")

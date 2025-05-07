@@ -1,12 +1,12 @@
-import uuid
-import aiohttp
 import asyncio
+import uuid
+
+import aiohttp
 from fastapi import HTTPException
 from pinecone import Pinecone
 
 from models.job_report import JobReport
 from services.agents.tools.extract_keywords import extract_keywords
-from services.gemini import GeminiLLM
 from services.text_embedder import TextEmbedder
 
 
@@ -15,12 +15,10 @@ class JobsPostingService:
             self,
             embedder: TextEmbedder,
             index: Pinecone.Index,
-            llm: GeminiLLM,
             session: aiohttp.ClientSession,
     ):
         self.embedder = embedder
         self.index = index
-        self.llm = llm
         self.session = session
 
     async def create_job_posting(self, job: JobReport) -> dict:
@@ -36,7 +34,7 @@ class JobsPostingService:
 
         # Run tasks concurrently
         embedding_task = self.embedder.get_embeddings([combined_text])
-        keywords_task = extract_keywords(combined_text, self.llm)
+        keywords_task = extract_keywords(combined_text)
 
         embedding, keywords = await asyncio.gather(embedding_task, keywords_task)
 

@@ -1,203 +1,173 @@
 import json
-from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Optional, List
 
 from fastapi import APIRouter, Form, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
-from starlette.responses import JSONResponse
 
-from dependencies import LLM, Parser, SupervisorAgent, User, CurrentUser
+from dependencies import Parser, CurrentUser, PineconeClient, Firestore
+from models.chat import Conversation, ConversationCreate, ConversationUpdate
+from services.agents.supervisor_agent import SupervisorAgent
+from services.agents.tools.create_supervisor_agent import create_supervisor_agent
 
 router = APIRouter()
 
 
-async def process_files(files: List[UploadFile], parser: Parser) -> List[Dict[str, Any]]:
-    """
-    Process uploaded files and extract content
+async def generate_stream_response(supervisor: SupervisorAgent, user_id: str, message: str):
+    """Generate a streaming response from the supervisor agent"""
 
-    Args:
-        files: List of uploaded files
-        parser: Parser service to extract content
+    # Variable to store the complete response for final update
+    complete_response = ""
 
-    Returns:
-        List of processed file data
-    """
-    processed_files = []
-
-    for file in files:
-        file_bytes = await file.read()
-        file_type = "text"
-        content = None
-
-        if file.filename.endswith('.pdf'):
-            file_type = "pdf"
-            content = parser.parse_pdf(file_bytes)
-
-        processed_files.append({
-            "filename": file.filename,
-            "type": file_type,
-            "bytes": file_bytes,
-            "content": content
-        })
-
-    return processed_files
-
-
-async def generate_chat_response(
-        llm: LLM,
-        system_prompt: str,
-        message: str
-):
-    """Stream chat response chunks"""
     try:
-        async for chunk in llm.generate_stream(system_prompt, message):
-            if chunk:
-                yield f"data: {chunk}\n\n"
+        async for chunk in supervisor.process_message(
+                user_id=user_id, message=message
+        ):
+            # we only stream *assistant text* inside delta.content
+            if chunk["type"] == "content_chunk":
+                # Accumulate the full response
+                complete_response += chunk["content"]
+                payload = {"choices": [{"delta": {"content": chunk["content"]}}]}
+            else:  # forward metadata once at the top
+                payload = {"event": chunk["type"], **chunk}
+
+                # If it's a completion event, make sure we include the full content
+                if chunk["type"] == "complete" and "conversation" in chunk:
+                    # Find and update the assistant message with complete_response
+                    for msg in chunk["conversation"]:
+                        if msg["role"] == "assistant" and msg["content"] is None:
+                            msg["content"] = complete_response
+
+            yield f"data: {json.dumps(payload)}\n\n"
+
         yield "data: [DONE]\n\n"
     except Exception as e:
-        yield f"data: Error: {str(e)}\n\n"
+        err = {"choices": [{"delta": {}}], "error": str(e)}
+        yield f"data: {json.dumps(err)}\n\n"
 
 
-@router.post("/stream")
-async def chat_stream(
+@router.post("")
+async def chat(
         current_user: CurrentUser,
         parser: Parser,
-        supervisor: SupervisorAgent,
+        pinecone: PineconeClient,
         message: str = Form(...),
-        files: Optional[List[UploadFile]] = File(None),
+        resume: Optional[UploadFile] = File(None),
         conversation_history: str = Form("[]"),
 ):
     """
-    Stream chat responses with optional file context
+    Process a chat message and return a streaming response
     """
     try:
-        print(f"[CHAT_STREAM] Processing message: {message[:50]}...")
-        print(f"[CHAT_STREAM] User: {current_user.user_id}")
-        print(f"[CHAT_STREAM] Files: {len(files) if files else 0}")
+        print(f"[CHAT] Processing message: {message[:50]}...")
+        print(f"[CHAT] User: {current_user.user_id}")
+        print(f"[CHAT] Resume file: {resume.filename if resume else 'None'}")
 
         # Parse conversation history
         history = json.loads(conversation_history)
-        print(f"[CHAT_STREAM] History items: {len(history)}")
+        print(f"[CHAT] History items: {len(history)}")
 
-        # Process any uploaded files
-        processed_files = await process_files(files or [], parser)
-        print(f"[CHAT_STREAM] Processed files: {len(processed_files)}")
-
-        # Process the message through supervisor
-        print(f"[CHAT_STREAM] Calling supervisor.process_message")
-        result = await supervisor.process_message(
+        # Create a new supervisor agent for this request
+        supervisor = await create_supervisor_agent(
             user_id=current_user.user_id,
-            message=message,
+            pinecone_client=pinecone,
             conversation_history=history,
-            files=processed_files if processed_files else None
+            resume_file=resume,
+            resume_parser=parser
         )
 
-        print(f"[CHAT_STREAM] Supervisor selected agent: {result['selected_agent']}")
-        print(f"[CHAT_STREAM] Response: {result['response'][:100]}..." if result["response"] else "No response")
-
-        return JSONResponse(
-            content=result
+        # Return a streaming response
+        return StreamingResponse(
+            generate_stream_response(
+                supervisor=supervisor,
+                user_id=current_user.user_id,
+                message=message,
+            ),
+            media_type="text/event-stream"
         )
     except Exception as e:
-        print(f"[CHAT_STREAM] Error: {str(e)}")
+        print(f"[CHAT] Error: {str(e)}")
         import traceback
         traceback.print_exc()
         return StreamingResponse(
-            iter([f"data: Error: {str(e)}\n\n"]),
+            iter([f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"]),
             media_type="text/event-stream"
         )
 
 
-@router.post("/message")
-async def process_message(
+@router.post("/conversations", response_model=Conversation)
+async def create_conversation(
+        data: ConversationCreate,
         current_user: CurrentUser,
-        supervisor: SupervisorAgent,
-        parser: Parser,
-        message: str = Form(...),
-        conversation_id: Optional[str] = Form(None),
-        conversation_history: str = Form("[]"),
-        files: Optional[List[UploadFile]] = File(None),
+        pinecone: PineconeClient,
+        db: Firestore
 ):
-    """
-    Process a user message through the supervisor agent
+    """Create a new conversation"""
+    # Convert messages to dictionaries for storage
+    messages_dict = [message.model_dump() for message in data.messages]
 
-    Args:
-        message: User's message text
-        conversation_id: Optional conversation identifier
-        conversation_history: Previous conversation in JSON format
-        files: Optional files attached to the message
-        supervisor: Supervisor agent
-        parser: PDF parser service
-        current_user: Authenticated user info
+    # Create the conversation in Firestore
+    conversation = db.create_conversation(
+        user_id=current_user.user_id,
+        first_message=data.firstMessage,
+        messages=messages_dict
+    )
 
-    Returns:
-        Agent response and updated conversation history
-    """
-    try:
-        # Parse conversation history
-        history = json.loads(conversation_history)
-
-        # Process any uploaded files
-        processed_files = await process_files(files or [], parser)
-
-        # Process the message
-        result = await supervisor.process_message(
-            user_id=current_user.user_id,
-            message=message,
-            conversation_history=history,
-            files=processed_files if processed_files else None
-        )
-
-        return {
-            "response": result["response"],
-            "conversation": result["conversation"],
-            "conversation_id": conversation_id or f"conv_{datetime.now().timestamp()}",
-            "selected_agent": result["active_agents"],
-            "error": result["error"]
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return conversation
 
 
-@router.get("/conversations")
+@router.get("/conversations", response_model=List[Conversation])
 async def get_conversations(
         current_user: CurrentUser,
+        db: Firestore
 ):
-    """
-    Get list of user's conversations
-
-    Args:
-        current_user: Authenticated user info
-
-    Returns:
-        List of conversation summaries
-    """
-    # This would typically fetch from a database
-    # For now, return an empty list as placeholder
-    return {"conversations": []}
+    """Get all conversations for the current user"""
+    conversations = db.get_user_conversations(current_user.user_id)
+    return conversations
 
 
-@router.get("/conversations/{conversation_id}")
+@router.get("/conversations/{conversation_id}", response_model=Conversation)
 async def get_conversation(
         conversation_id: str,
         current_user: CurrentUser,
+        db: Firestore
 ):
-    """
-    Get a specific conversation history
+    """Get a specific conversation"""
+    conversation = db.get_conversation(conversation_id, current_user.user_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
 
-    Args:
-        conversation_id: Conversation identifier
-        current_user: Authenticated user info
 
-    Returns:
-        Complete conversation history
-    """
-    # This would typically fetch from a database
-    # For now, return an empty conversation as placeholder
-    return {
-        "conversation_id": conversation_id,
-        "messages": [],
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat()
-    }
+@router.put("/conversations/{conversation_id}", response_model=Conversation)
+async def update_conversation(
+        data: ConversationUpdate,
+        conversation_id: str,
+        current_user: CurrentUser,
+        db: Firestore
+):
+    """Update a conversation"""
+    # Convert messages to dictionaries for storage
+    messages_dict = [message.dict() for message in data.messages]
+
+    conversation = db.update_conversation(
+        conversation_id=conversation_id,
+        user_id=current_user.user_id,
+        messages=messages_dict
+    )
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conversation
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+        conversation_id: str,
+        current_user: CurrentUser,
+        db: Firestore
+):
+    """Delete a conversation"""
+    success = db.delete_conversation(conversation_id, current_user.user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"message": "Conversation deleted successfully"}
