@@ -132,7 +132,6 @@ class LLM(ABC):
                 else self.chat
             )
             resp = await chat.ainvoke(msgs)
-            print(f"[LLM] Response: {resp}", type(resp))
             content = resp.content if isinstance(resp, BaseMessage) else resp
             return LLMResponse(
                 content=content,
