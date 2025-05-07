@@ -289,7 +289,6 @@ class JobSearchAgent(ReActAgent):
                         jobs.append(job)
 
                 # Limit to requested top_k after post-filtering
-                print(f"[JOB SEARCH]: f{json.dumps({"jobs": jobs[:top_k], "count": len(jobs[:top_k])})}")
                 return json.dumps({"jobs": jobs[:top_k], "count": len(jobs[:top_k])})
             except Exception as e:
                 return json.dumps({"error": str(e), "jobs": [], "count": 0})
