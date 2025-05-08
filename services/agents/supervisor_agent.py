@@ -101,7 +101,6 @@ class SupervisorAgent:
         async for output in self.workflow.astream(init_state, stream_mode="updates"):
             # When using "updates" mode, output will be a dict with node name as key
             # and the node's updates as value
-            print(f"[SUPERVISOR] Output: {output}")
             if output:  # Check if output is not empty
                 node_name = next(iter(output.keys()), None)
                 if node_name == "analyze":
@@ -248,7 +247,6 @@ class SupervisorAgent:
 
     async def _stream_synthesize_response(self, state: SupervisorState) -> AsyncGenerator[str, None]:
         serialised = {k: (v.model_dump_json() if hasattr(v, "model_dump_json") else json.dumps(v)) for k, v in state.agent_results.items()}
-        print(f"[SUPERVISOR] Synthesizing response with data: {json.dumps(serialised, indent=2)}")
         prompt = f"""
         Provide a concise markdown answer to the user's query using only the relevant data below.
         Preserve links and any other relevant information.

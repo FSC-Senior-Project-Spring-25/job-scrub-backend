@@ -123,7 +123,6 @@ async def get_resume_data(
         resume_vector = embeddings[0].tolist()
         print(f"[CREATE_SUPERVISOR] Generated vector for uploaded resume")
         print(f"[CREATE_SUPERVISOR] Resume text: {resume_text[:50]}...")
-        print(f"[CREATE_SUPERVISOR] Resume vector: {resume_vector}")
         return {
             "text": resume_text,
             "vector": resume_vector,
