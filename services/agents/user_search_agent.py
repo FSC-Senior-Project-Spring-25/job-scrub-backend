@@ -225,8 +225,6 @@ class UserSearchAgent(ReActAgent):
                         response_format=ResumeProfile
                     )
 
-                    print(f"[USER_SEARCH] LLM response: {response.success}, content: {response.content}")
-
                     if response.success:
                         profile = response.content
                         name = profile.name if profile.name != "Candidate" else "Professional Candidate"

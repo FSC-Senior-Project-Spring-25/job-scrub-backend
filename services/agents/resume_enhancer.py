@@ -173,8 +173,6 @@ class ResumeEnhancementAgent(ReActAgent):
         """
         # Use the parent implementation to extract the answer
         answer = super()._extract_answer(state)
-        print("Enhancer Final Result:")
-        print(answer)
         return answer
 
     def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:

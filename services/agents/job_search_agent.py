@@ -21,12 +21,12 @@ class JobFilterParams(BaseModel):
     min_date: Optional[str] = Field(None, description="Minimum date in YYYY-MM-DD format")
     max_date: Optional[str] = Field(None, description="Maximum date in YYYY-MM-DD format")
     skills: Optional[List[str]] = Field(None, description="Required skills to filter jobs")
+    keywords: Optional[List[str]] = Field(None, description="Keywords to filter jobs by")
     benefits: Optional[List[str]] = Field(None, description="Required benefits to filter jobs")
     min_salary: Optional[str] = Field(None, description="Minimum salary filter")
     max_salary: Optional[str] = Field(None, description="Maximum salary filter")
     location_address: Optional[str] = Field(None, description="Location substring to match")
     top_k: Optional[int] = Field(5, description="Number of results to return")
-
 
 class JobSearchState(MessagesState):
     prompt: str
@@ -85,28 +85,31 @@ class JobSearchAgent(ReActAgent):
         if not any(hasattr(msg, 'tool_call_id') for msg in messages):
             # Extract relevant skills and job criteria from the prompt
             try:
+                # In the think method, update the filter_prompt to include keywords:
                 filter_prompt = f"""
                 Extract relevant job search filters from this query: "{prompt}"
 
                 For a Computer Science major, consider these filter parameters:
                 1. Job titles related to computer science (Software Engineer, Data Scientist, etc.)
                 2. Skills that would be relevant (programming languages, frameworks, etc.)
-                3. Job types that would be appropriate (fulltime, internship, etc.)
-                4. Location preferences (remote, hybrid, onsite, specific location)
-                5. Company names mentioned
-                6. Benefits that might be important
-                7. Salary expectations if mentioned
-                8. Date ranges for job postings if mentioned
+                3. Keywords that might appear in job descriptions
+                4. Job types that would be appropriate (fulltime, internship, etc.)
+                5. Location preferences (remote, hybrid, onsite, specific location)
+                6. Company names mentioned
+                7. Benefits that might be important
+                8. Salary expectations if mentioned
+                9. Date ranges for job postings if mentioned
 
                 Return ONLY a structured JSON object with these fields (leave empty if not specified):
                 {{
                     "title": "exact job title",
-                    "company": "exact company name",
+                    "company": "exact company name", 
                     "job_types": ["fulltime", "parttime", "internship", "contract", "volunteer"],
                     "location_types": ["remote", "onsite", "hybrid"],
                     "min_date": "YYYY-MM-DD",
                     "max_date": "YYYY-MM-DD",
                     "skills": ["skill1", "skill2"],
+                    "keywords": ["keyword1", "keyword2"],
                     "benefits": ["benefit1", "benefit2"],
                     "min_salary": "min salary as string",
                     "max_salary": "max salary as string",
@@ -130,6 +133,8 @@ class JobSearchAgent(ReActAgent):
 
                     # Create tool call instruction with intelligent filters
                     filter_instructions = ""
+                    if filters.keywords:
+                        filter_instructions += f"\nKeywords to filter by: {', '.join(filters.keywords)}"
                     if filters.skills:
                         filter_instructions += f"\nSkills to filter by: {', '.join(filters.skills)}"
                     if filters.title:
@@ -186,6 +191,7 @@ class JobSearchAgent(ReActAgent):
                 min_date: Optional[str] = None,
                 max_date: Optional[str] = None,
                 skills: Optional[List[str]] = None,
+                keywords: Optional[List[str]] = None,
                 benefits: Optional[List[str]] = None,
                 min_salary: Optional[str] = None,
                 max_salary: Optional[str] = None,
@@ -202,6 +208,7 @@ class JobSearchAgent(ReActAgent):
                 location_type: One of 'remote','onsite','hybrid'
                 min_date: Minimum posting date in format 'YYYY-MM-DD'
                 max_date: Maximum posting date in format 'YYYY-MM-DD'
+                keywords: List of keywords to filter by
                 skills: List of required skills to filter by
                 benefits: List of required benefits to filter by
                 min_salary: Minimum salary string (will be matched as substring)
@@ -240,7 +247,12 @@ class JobSearchAgent(ReActAgent):
                     metadata_filter["$or"] = []
                 metadata_filter["$or"].extend([{"benefits": benefit} for benefit in benefits])
 
-            print("Metadata filter:", metadata_filter)
+            # Add keywords filter similar to how it's done in UserSearchAgent
+            if keywords and len(keywords) > 0:
+                # Use $in operator to match any job containing at least one keyword
+                metadata_filter["keywords"] = {"$in": keywords}
+
+            print(f"[JOB SEARCH]: Using metadata filter: {metadata_filter}")
 
             try:
                 response = self.job_index.query(
