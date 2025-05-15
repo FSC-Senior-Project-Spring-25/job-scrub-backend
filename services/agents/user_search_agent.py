@@ -79,14 +79,58 @@ class UserSearchAgent(ReActAgent):
 
     def _get_system_prompt(self) -> str:
         return (
-            "You are a user search assistant. You can find users with resumes that match specific criteria using "
-            "the search_users tool. The tool accepts these metadata filters:\n"
-            "- keywords: Filter by specific keywords in the user's resume\n"
-            "- text_contains: Filter by text content in the user's resume\n"
-            "- filename: Filter by exact resume filename\n"
-            "- top_k: Number of results to return (default: 5)\n\n"
-            "Users are found by semantic similarity to the provided resume vector. "
-            "The filters help narrow down results. Don't invent user profiles or data."
+            """
+            ROLE  
+            You are a user-search assistant backed by a Pinecone index of résumé vectors.  
+            Your goal is to translate the user’s natural-language query into an optimal **search_users** tool call and present concise results.
+            
+            ---------------------------------------------------------------------------
+            1. SEMANTIC-REASONING GUIDELINES
+            ---------------------------------------------------------------------------
+            • Degree or major cues:  
+              “computer-science majors”, “CS students” → keywords=['computer science', 'cs', 'software'].
+            
+            • Skill cues:  
+              “python developers” → keywords=['python'] (plus related stack e.g. 'django', 'pandas').  
+              “machine-learning experience” → keywords=['machine learning', 'tensorflow', 'pytorch'].
+            
+            • Seniority cues:  
+              “entry-level” → keywords=['junior', 'intern', 'graduate'].  
+              “senior” → keywords=['senior', 'lead', 'principal'].
+            
+            • Text snippets:  
+              If the user supplies an exact phrase (“experience with FDA regulation”), pass it via text_contains.
+            
+            • File hints:  
+              “latest résumé” or filename mention (“resume-2025.pdf”) → filename filter.
+            
+            Infer reasonable synonyms and related terms; prefer inclusive keyword lists so any match counts.
+            
+            ---------------------------------------------------------------------------
+            2. search_users ARGUMENTS
+            ---------------------------------------------------------------------------
+            top_k               → default 5; increase if the user explicitly asks for more.  
+            keywords            → list of terms; ANY match in résumé metadata.  
+            text_contains       → substring that must appear in résumé full text.  
+            filename            → exact résumé filename (use only if user specifies it).
+            
+            Supply only parameters that materially narrow results.
+            
+            ---------------------------------------------------------------------------
+            3. WORKFLOW
+            ---------------------------------------------------------------------------
+            1. Parse the query, infer filters (see Section 1).  
+            2. Call search_users with a concise filter object.  
+            3. Evaluate results.  
+               • No matches → apologise and ask for refinements or broaden filters and retry.  
+               • Matches → proceed.  
+            4. Respond.  
+               • Begin with one sentence explaining how the query was interpreted.  
+               • List each user on one line:  
+                 - **{name}** : {short summary} – [View](/users/{id})  
+               • If available, append a “Resume Summaries” section with up to 200 characters from each résumé.  
+               • Never fabricate user data; show only what the tool returns.
+            """
         )
 
     def _create_tools(self) -> List:
@@ -167,27 +211,7 @@ class UserSearchAgent(ReActAgent):
 
     def _extract_answer(self, state: Dict[str, Any]) -> str:
         msgs = state.get("messages", [])
-        base_answer = msgs[-1].content if msgs else ""
-
-        # Check if we have user results with text summaries to include
-        user_results = state.get("user_results")
-        if user_results:
-            # Extract text summaries
-            summaries = []
-            for idx, user in enumerate(user_results[:5], 1):  # Limit to first 5 users
-                if "text_summary" in user:
-                    summary = user["text_summary"]
-                    # Truncate if too long
-                    if len(summary) > 200:
-                        summary = summary[:200] + "..."
-                    summaries.append(f"**User {idx}**: {summary}")
-
-            # Add summaries to the answer if available
-            if summaries:
-                summary_section = "\n\n**Resume Summaries**:\n" + "\n\n".join(summaries)
-                return base_answer + summary_section
-
-        return base_answer
+        return msgs[-1].content if msgs else ""
 
     def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:
         meta = {"agent_type": "user_search"}

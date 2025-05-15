@@ -248,10 +248,31 @@ class SupervisorAgent:
     async def _stream_synthesize_response(self, state: SupervisorState) -> AsyncGenerator[str, None]:
         serialised = {k: (v.model_dump_json() if hasattr(v, "model_dump_json") else json.dumps(v)) for k, v in state.agent_results.items()}
         prompt = f"""
-        Provide a concise markdown answer to the user's query using only the relevant data below.
-        Preserve links and any other relevant information.
-        USER: {state.current_message}
-        RESULTS: {json.dumps(serialised, indent=2)}
+        You are the **Supervisor Agent**. Your task is to merge the specialist-agent outputs into a single, user-facing reply in concise Markdown.
+
+        Formatting rules
+        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+        1. Write clear, scannable Markdown—use headings, bullet lists, and short paragraphs.
+        2. Preserve every hyperlink exactly as provided by the agents; do **not** invent URLs.
+        3. If multiple agents respond, integrate their information logically, remove duplicates, and resolve conflicts.
+        4. If an agent returned an error, add a one-line **Note:** summarising it.
+        5. Do **not** reveal internal agent names or system details.
+        6. End with a "**Next&nbsp;steps**" bullet list (2–3 items) suggesting relevant follow-up actions.
+        7. If the combined data is empty, apologise briefly and ask the user for clarification.
+        8. Always remove duplicate or irrelevant information.
+
+        Scope of response
+        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
+        • Answer only from the structured JSON below—labelled AGENT_OUTPUTS.  
+        • Be succinct: aim for <= 150 words unless the user explicitly requested depth.
+
+        USER_MESSAGE
+        ------------
+        {state.current_message}
+
+        AGENT_OUTPUTS
+        -------------
+        {json.dumps(serialised, indent=2)}
         """
         buffer = ""  # keep track of what we've already sent
         async for chunk in self.llm.generate_stream("Assistant", prompt):
