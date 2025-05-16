@@ -41,11 +41,12 @@ async def calculate_resume_similarity(
             resume_text=resume_text,
         )
         # Process using the matching agent
-        result = await matching_agent.invoke(job_description)
+        result = await matching_agent.invoke(job_description, [])
 
         return result.answer
 
     except Exception as e:
+        print(f"Error in resume matching: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

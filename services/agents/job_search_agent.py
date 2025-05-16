@@ -6,31 +6,16 @@ from langchain_core.tools import tool
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
-from pydantic import BaseModel, Field
 
+from models.chat import Message
 from services.agents.base.agent import ReActAgent, AgentResponse
 from services.llm.base.llm import LLM
 
 
-class JobFilterParams(BaseModel):
-    """Schema for job search filter parameters."""
-    title: Optional[str] = Field(None, description="Exact job title to match")
-    company: Optional[str] = Field(None, description="Exact company name to match")
-    job_types: Optional[List[str]] = Field(None, description="Job types (fulltime, parttime, internship, contract, volunteer)")
-    location_types: Optional[List[str]] = Field(None, description="Location types (remote, onsite, hybrid)")
-    min_date: Optional[str] = Field(None, description="Minimum date in YYYY-MM-DD format")
-    max_date: Optional[str] = Field(None, description="Maximum date in YYYY-MM-DD format")
-    skills: Optional[List[str]] = Field(None, description="Required skills to filter jobs")
-    keywords: Optional[List[str]] = Field(None, description="Keywords to filter jobs by")
-    benefits: Optional[List[str]] = Field(None, description="Required benefits to filter jobs")
-    min_salary: Optional[str] = Field(None, description="Minimum salary filter")
-    max_salary: Optional[str] = Field(None, description="Maximum salary filter")
-    location_address: Optional[str] = Field(None, description="Location substring to match")
-    top_k: Optional[int] = Field(5, description="Number of results to return")
-
 class JobSearchState(MessagesState):
     prompt: str
     job_results: Optional[List[Dict[str, Any]]]
+    conversation_history: List[Message]
 
 
 class JobSearchAgent(ReActAgent):
@@ -42,9 +27,10 @@ class JobSearchAgent(ReActAgent):
         self.resume_vector = resume_vector
         super().__init__(llm)
 
-    async def invoke(self, prompt: str) -> AgentResponse:
+    async def invoke(self, prompt: str, history: List[Message] = None) -> AgentResponse:
         initial_state = {
             "prompt": prompt,
+            "conversation_history": history or [],
             "job_results": None,
             "messages": [{"role": "user", "content": prompt}]
         }
@@ -53,8 +39,9 @@ class JobSearchAgent(ReActAgent):
 
     def think(self, state: Dict[str, Any]) -> Dict[str, Any]:
         prompt = state.get("prompt")
+        conversation_history = state.get("conversation_history", [])
         new_state = dict(state)
-
+        print(f"[JOB SEARCH]: Thinking about prompt: {prompt} with history: {conversation_history}")
         # capture any returned results
         messages = state.get("messages", [])
         if messages:
@@ -71,9 +58,10 @@ class JobSearchAgent(ReActAgent):
         sys_msg = SystemMessage(content=self._get_system_prompt())
         new_messages: List[BaseMessage] = [sys_msg] + messages
 
+        # if we have job_results, handle summary or no-match
         if new_state.get("job_results") is not None:
             if not new_state["job_results"]:
-                new_messages.append(HumanMessage(content="I couldn't find any job postings matching your criteria."))
+                new_messages.append(HumanMessage(content="I couldn't find any jobs matching your criteria."))
                 new_state["messages"] = messages + [new_messages[-1]]
                 return new_state
             # Summarize found jobs
@@ -81,83 +69,24 @@ class JobSearchAgent(ReActAgent):
             new_state["messages"] = messages + [invocation]
             return new_state
 
-        # First turn: preprocess query with LLM to create intelligent filters
-        if not any(hasattr(msg, 'tool_call_id') for msg in messages):
-            # Extract relevant skills and job criteria from the prompt
-            try:
-                # In the think method, update the filter_prompt to include keywords:
-                filter_prompt = f"""
-                Extract relevant job search filters from this query: "{prompt}"
+        # First turn: prepare context from history and instruct tool call with filters
+        history_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Get last few messages for context, limited to 5 for relevance
+            recent_messages = conversation_history[-5:]
+            history_context = "\n".join([
+                f"{msg.role}: {msg.content}" for msg in recent_messages
+            ])
+            history_context = f"\nRecent conversation context:\n{history_context}\n"
 
-                For a Computer Science major, consider these filter parameters:
-                1. Job titles related to computer science (Software Engineer, Data Scientist, etc.)
-                2. Skills that would be relevant (programming languages, frameworks, etc.)
-                3. Keywords that might appear in job descriptions
-                4. Job types that would be appropriate (fulltime, internship, etc.)
-                5. Location preferences (remote, hybrid, onsite, specific location)
-                6. Company names mentioned
-                7. Benefits that might be important
-                8. Salary expectations if mentioned
-                9. Date ranges for job postings if mentioned
-
-                Return ONLY a structured JSON object with these fields (leave empty if not specified):
-                {{
-                    "title": "exact job title",
-                    "company": "exact company name", 
-                    "job_types": ["fulltime", "parttime", "internship", "contract", "volunteer"],
-                    "location_types": ["remote", "onsite", "hybrid"],
-                    "min_date": "YYYY-MM-DD",
-                    "max_date": "YYYY-MM-DD",
-                    "skills": ["skill1", "skill2"],
-                    "keywords": ["keyword1", "keyword2"],
-                    "benefits": ["benefit1", "benefit2"],
-                    "min_salary": "min salary as string",
-                    "max_salary": "max salary as string",
-                    "location_address": "location substring",
-                    "top_k": 5
-                }}
-                """
-
-                filter_response = self.llm.generate(
-                    system_prompt="You are a job search filter generator that extracts structured search criteria from natural language queries about computer science jobs.",
-                    user_message=filter_prompt,
-                    response_format=JobFilterParams
-                )
-
-                if filter_response.success:
-                    # Use filter_response.content directly as it's already a JobFilterParams instance
-                    filters = filter_response.content
-
-                    # Log the extracted filters
-                    print(f"[JOB_SEARCH] Extracted filters: {filters}")
-
-                    # Create tool call instruction with intelligent filters
-                    filter_instructions = ""
-                    if filters.keywords:
-                        filter_instructions += f"\nKeywords to filter by: {', '.join(filters.keywords)}"
-                    if filters.skills:
-                        filter_instructions += f"\nSkills to filter by: {', '.join(filters.skills)}"
-                    if filters.title:
-                        filter_instructions += f"\nPossible job title: {filters.title}"
-                    if filters.job_types:
-                        filter_instructions += f"\nJob types to consider: {', '.join(filters.job_types)}"
-                    if filters.location_types:
-                        filter_instructions += f"\nLocation types to consider: {', '.join(filters.location_types)}"
-
-                    instruction = (
-                        f"Use the search_jobs tool to find jobs matching: '{prompt}'. {filter_instructions}\n"
-                        f"Use these filters to construct an appropriate search query."
-                    )
-                else:
-                    # Fall back to generic instruction if LLM fails
-                    instruction = f"Use the search_jobs tool to find jobs matching: '{prompt}'. Consider focusing on computer science related positions."
-
-            except Exception as e:
-                print(f"[JOB_SEARCH] Error in filter preprocessing: {str(e)}")
-                instruction = f"Use the search_jobs tool to find jobs matching: '{prompt}'."
-
-            new_messages.append(HumanMessage(content=instruction))
-
+        new_messages.append(
+            HumanMessage(content=(
+                f"Use the search_jobs tool to find the top job postings matching: '{prompt}'. "
+                f"Please include any relevant metadata filters to narrow the results."
+                f"Additionally, adjust filters based on history:"
+                f"\n**HISTORY**:\n\n{history_context}"
+            ))
+        )
         # invoke function-calling
         invocation = self.llm_with_tools.invoke(new_messages)
         new_state["messages"] = messages + [invocation]
@@ -165,19 +94,73 @@ class JobSearchAgent(ReActAgent):
 
     def _get_system_prompt(self) -> str:
         return (
-            "You are a job search assistant. You have access to a search_jobs tool that accepts these metadata filters:\n"
-            "- title: Filter by exact job title\n"
-            "- company: Filter by exact company name\n"
-            "- job_type: One of 'fulltime','parttime','internship','contract','volunteer'\n"
-            "- location_type: One of 'remote','onsite','hybrid'\n"
-            "- min_date/max_date: Date range filters in format 'YYYY-MM-DD'\n"
-            "- skills: List of required skills to filter by\n"
-            "- benefits: List of required benefits to filter by\n"
-            "- min_salary/max_salary: Salary range filters (substring match)\n"
-            "- location_address: Location substring to match\n"
-            "- top_k: Number of results to return (default: 5)\n\n"
-            "Use these filters to retrieve relevant job postings based on the internal resume vector. "
-            "Be precise with your filters to find the most relevant jobs. Do not invent listings."
+            """
+            ROLE
+            You are a job-search assistant backed by a Pinecone vector index of job postings.
+            When the user asks for jobs, decide which metadata filters will surface the most relevant matches and call the **search_jobs** tool with those filters.
+
+            -------------------------------------------------------------------------------
+            1. SEMANTIC-REASONING GUIDELINES (be creative but grounded)
+            -------------------------------------------------------------------------------
+            • "computer-science major", "CS student" → job_type='internship' OR title contains
+              [Software Engineer, Developer, Data Analyst, Research Intern].
+
+            • "entry level", "new grad" → job_type='fulltime', min_date = last 90 days,
+              seniority keywords [Junior, Graduate, Associate] in title.
+
+            • Geography:
+              – "in Bay Area" → location_address='San Francisco' (also 'San Jose', etc.)
+              – "US-remote only" → location_type='remote', location_address='United States'.
+
+            • Benefits:
+              – "visa sponsorship" → benefits=['visa sponsorship','H-1B','relocation'].
+              – "stock options"   → benefits=['equity','stock options'].
+
+            • Salary:
+              – "at least 120k" → min_salary='$120k'.
+              – "25/hour"       → min_salary='25 hr'.
+
+            • Time:
+              – "posted this week" → min_date = today-7.
+              – "last month"       → min_date = today-30.
+
+            • Sector hints:
+              – "med-tech" → title or company contains [medical, health, bio].
+              – "AI"       → skills include [machine learning, deep learning, LLM].
+
+            If several interpretations are plausible, choose the filter set that is most likely to help the user and briefly state your reasoning in the reply.
+
+            -------------------------------------------------------------------------------
+            2. search_jobs ARGUMENTS
+            -------------------------------------------------------------------------------
+            top_k              → default 5; increase when the user explicitly asks for more.
+            title              → partial match strings or list of synonyms.
+            company            → exact or partial match.
+            job_type           → 'fulltime' | 'parttime' | 'internship' | 'contract' | 'volunteer'.
+            location_type      → 'remote' | 'onsite' | 'hybrid'.
+            min_date / max_date→ YYYY-MM-DD.
+            skills             → list; ANY match.
+            keywords           → list; ANY match in job description or metadata.
+            benefits           → list; ANY match.
+            min_salary / max_salary → substring checks (e.g. '$120k', '25 hr').
+            location_address   → substring on city, state, or country.
+
+            Include only parameters that materially narrow the results.
+
+            -------------------------------------------------------------------------------
+            3. WORKFLOW
+            -------------------------------------------------------------------------------
+            1. Parse the user message and conversation context to infer filters (see Section 1).
+            2. Call search_jobs with a concise filter object.
+            3. Inspect results.
+               • If none → apologise and ask for clarifications or broaden filters and retry.
+               • If few but relevant → return them and invite further refinement if needed.
+            4. Respond to the user.
+               • For matches, list each job on one line:
+                 - **{title}** at {company} (Remote · $Salary): [View](/jobs/{id})
+               • Prepend a short sentence that explains how you interpreted the query.
+               • Never fabricate job data; display only what the tool returns.
+            """
         )
 
     def _create_tools(self) -> List:
@@ -220,13 +203,11 @@ class JobSearchAgent(ReActAgent):
             """
             metadata_filter: Dict[str, Any] = {}
 
-            # These enum-like fields can stay as exact matches
             if job_type:
                 metadata_filter["jobType"] = {"$eq": job_type}
             if location_type:
                 metadata_filter["locationType"] = {"$eq": location_type}
 
-            # Date range filters stay the same
             if min_date:
                 metadata_filter["date"] = metadata_filter.get("date", {})
                 metadata_filter["date"]["$gte"] = min_date
@@ -237,7 +218,6 @@ class JobSearchAgent(ReActAgent):
             # For list fields like skills and benefits, use $in operator instead of requiring all
             if skills and len(skills) > 0:
                 # Create a filter that matches if ANY of the requested skills are present
-                # This is more lenient than requiring all skills
                 metadata_filter["$or"] = metadata_filter.get("$or", [])
                 metadata_filter["$or"].extend([{"skills": skill} for skill in skills])
 
@@ -247,7 +227,6 @@ class JobSearchAgent(ReActAgent):
                     metadata_filter["$or"] = []
                 metadata_filter["$or"].extend([{"benefits": benefit} for benefit in benefits])
 
-            # Add keywords filter similar to how it's done in UserSearchAgent
             if keywords and len(keywords) > 0:
                 # Use $in operator to match any job containing at least one keyword
                 metadata_filter["keywords"] = {"$in": keywords}
