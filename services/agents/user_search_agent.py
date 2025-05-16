@@ -138,7 +138,7 @@ class UserSearchAgent(ReActAgent):
             4. Respond.  
                • Begin with one sentence explaining how the query was interpreted.  
                • List each user on one line:  
-                 - **{name}** : {short summary} – [View](/users/{id})  
+                 - **{name}** : {short summary} – [View Profile](/profile/{id})  
                • If available, append a “Resume Summaries” section with up to 200 characters from each résumé.  
                • Never fabricate user data; show only what the tool returns.
                • Remove any duplicate users.
@@ -185,14 +185,15 @@ class UserSearchAgent(ReActAgent):
                 # fallback to pure vector search
                 response = _run_query(None)
 
-            print(f"Search results: {response.matches}")
             users = []
+            print(f"[USER SEARCH]: Using metadata filter: {metadata_filter}")
             for match in response.matches:
                 user_data = {
                     "user_id": match.id,
                     "score": match.score,
                     "keywords": match.metadata.get("keywords", []),
                     "file_id": match.metadata.get("file_id", ""),
+                    "text": match.metadata.get("text", ""),
                 }
 
                 # summarize the text field if present
@@ -223,6 +224,33 @@ class UserSearchAgent(ReActAgent):
 
     def _extract_answer(self, state: Dict[str, Any]) -> str:
         msgs = state.get("messages", [])
+        user_results = state.get("user_results", [])
+        if user_results:
+            lines = ["## Found Users", ""]  # heading + blank line
+            for i, user in enumerate(user_results):
+                user_id = user.get("user_id", f"user-{i}")
+                keywords = user.get("keywords", [])
+                text_summary = user.get("text", "")
+
+                # Create a brief summary from keywords and text
+                keyword_text = ", ".join(keywords[:3]) if keywords else ""
+                summary = f"{keyword_text}"
+                if text_summary:
+                    summary += f": {text_summary[:100]}..." if len(text_summary) > 100 else f": {text_summary}"
+
+                # ONE bullet, everything on one line
+                lines.append(
+                    f"- {summary} – [View Profile](/profile/{user_id})"
+                )
+
+            # Append last message content
+            if msgs:
+                lines.append("")  # blank line
+                lines.append(msgs[-1].content)
+
+            return "\n".join(lines) + "\n"  # final trailing \n is optional
+
+        # fall‑back to last assistant message if nothing to format
         return msgs[-1].content if msgs else ""
 
     def _extract_metadata(self, state: Dict[str, Any]) -> Dict[str, Any]:

@@ -41,7 +41,6 @@ class JobSearchAgent(ReActAgent):
         prompt = state.get("prompt")
         conversation_history = state.get("conversation_history", [])
         new_state = dict(state)
-        print(f"[JOB SEARCH]: Thinking about prompt: {prompt} with history: {conversation_history}")
         # capture any returned results
         messages = state.get("messages", [])
         if messages:
