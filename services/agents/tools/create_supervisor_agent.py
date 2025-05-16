@@ -164,7 +164,6 @@ def convert_conversation_history(conversation_history: Optional[List[Dict[str, A
                 role=item["role"],
                 content=item["content"],
                 timestamp=item["timestamp"],
-                metadata=item.get("metadata", {})
             )
             for item in conversation_history
         ]

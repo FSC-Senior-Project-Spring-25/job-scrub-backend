@@ -203,10 +203,10 @@ class SupervisorAgent:
         print(f"[SUPERVISOR] Executing agents: {state.active_agents}")
         calls = {
             "USER_PROFILE": lambda: self.user_profile_agent.invoke(prompt=state.current_message),
-            "RESUME_MATCHER": lambda: self.resume_matcher.invoke(job_description=state.current_message),
-            "RESUME_ENHANCER": lambda: self.resume_enhancer.invoke(prompt=state.current_message),
-            "JOB_SEARCH": lambda: self.job_search_agent.invoke(prompt=state.current_message),
-            "USER_SEARCH": lambda: self.user_search_agent.invoke(prompt=state.current_message),
+            "RESUME_MATCHER": lambda: self.resume_matcher.invoke(prompt=state.current_message, history=state.conversation_history),
+            "RESUME_ENHANCER": lambda: self.resume_enhancer.invoke(prompt=state.current_message, history=state.conversation_history),
+            "JOB_SEARCH": lambda: self.job_search_agent.invoke(prompt=state.current_message, history=state.conversation_history),
+            "USER_SEARCH": lambda: self.user_search_agent.invoke(prompt=state.current_message, history=state.conversation_history),
             "CHAT": lambda: handle_chat(
                 message=state.current_message,
                 conversation_history=state.conversation_history,
@@ -257,9 +257,8 @@ class SupervisorAgent:
         3. If multiple agents respond, integrate their information logically, remove duplicates, and resolve conflicts.
         4. If an agent returned an error, add a one-line **Note:** summarising it.
         5. Do **not** reveal internal agent names or system details.
-        6. End with a "**Next&nbsp;steps**" bullet list (2–3 items) suggesting relevant follow-up actions.
-        7. If the combined data is empty, apologise briefly and ask the user for clarification.
-        8. Always remove duplicate or irrelevant information.
+        6. If the combined data is empty, apologise briefly and ask the user for clarification.
+        7. Always remove duplicate or irrelevant information.
 
         Scope of response
         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾

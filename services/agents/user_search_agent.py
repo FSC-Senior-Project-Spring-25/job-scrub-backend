@@ -7,12 +7,14 @@ from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
+from models.chat import Message
 from services.agents.base.agent import ReActAgent, AgentResponse
 from services.llm.base.llm import LLM
 
 
 class UserSearchState(MessagesState):
     prompt: str
+    conversation_history: List[Message]
     user_results: Optional[List[Dict[str, Any]]]
 
 
@@ -25,9 +27,10 @@ class UserSearchAgent(ReActAgent):
         self.resume_vector = resume_vector
         super().__init__(llm)
 
-    async def invoke(self, prompt: str) -> AgentResponse:
+    async def invoke(self, prompt: str, history: List[Message]) -> AgentResponse:
         initial_state = {
             "prompt": prompt,
+            "conversation_history": history or [],
             "user_results": None,
             "messages": [{"role": "user", "content": prompt}]
         }
@@ -36,6 +39,7 @@ class UserSearchAgent(ReActAgent):
 
     def think(self, state: Dict[str, Any]) -> Dict[str, Any]:
         prompt = state.get("prompt")
+        conversation_history = state.get("conversation_history", [])  # Retrieve history
         new_state = dict(state)
 
         # Capture any returned results
@@ -65,11 +69,18 @@ class UserSearchAgent(ReActAgent):
             new_state["messages"] = messages + [invocation]
             return new_state
 
-        # First turn: instruct tool call with filters
+        # First turn: include recent conversation context and instruct tool call
+        history_context = ""
+        if conversation_history:
+            recent = conversation_history[-5:]
+            history_context = "\nRecent conversation context:\n" + "\n".join(f"{m.role}: {m.content}" for m in recent) + "\n"
+
         new_messages.append(
             HumanMessage(content=(
                 f"Use the search_users tool to find users with resumes matching: '{prompt}'. "
-                "You can use filters based on resume keywords and content."
+                f"Please include any relevant metadata filters to narrow the results."
+                f"Additionally, adjust filters based on history:"
+                f"\n**HISTORY**:\n\n{history_context}"
             ))
         )
         # Invoke function-calling
@@ -130,6 +141,7 @@ class UserSearchAgent(ReActAgent):
                  - **{name}** : {short summary} – [View](/users/{id})  
                • If available, append a “Resume Summaries” section with up to 200 characters from each résumé.  
                • Never fabricate user data; show only what the tool returns.
+               • Remove any duplicate users.
             """
         )
 

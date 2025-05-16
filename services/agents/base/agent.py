@@ -32,6 +32,11 @@ class Agent(ABC):
         pass
 
     @abstractmethod
+    def _get_system_prompt(self) -> str:
+        """Return the system prompt for this agent"""
+        pass
+
+    @abstractmethod
     def _create_workflow(self) -> CompiledStateGraph:
         """Create and return the agent's workflow"""
         pass
@@ -70,11 +75,6 @@ class ReActAgent(Agent):
     @abstractmethod
     def _create_tools(self) -> List:
         """Create and return list of tools for the agent"""
-        pass
-
-    @abstractmethod
-    def _get_system_prompt(self) -> str:
-        """Return the system prompt for this agent"""
         pass
 
     def think(self, state: MessagesState) -> AgentState:

@@ -8,6 +8,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel, Field
 
+from models.chat import Message
 from services.agents.base.agent import ReActAgent, AgentResponse
 from services.llm.base.llm import LLM
 
@@ -87,7 +88,7 @@ class EnhancementState(MessagesState):
     It holds the resume text and conversation messages.
     """
     prompt: str
-    job_description: Optional[str]
+    conversation_history: List[Message]
     formatting_issues: Optional[List[Dict[str, Any]]]
     ats_analysis: Optional[Dict[str, Any]]
     content_quality: Optional[Dict[str, Any]]
@@ -133,13 +134,13 @@ class ResumeEnhancementAgent(ReActAgent):
             "You can call the suggestions_tool directly without requiring prior analysis if appropriate."
         )
 
-    async def invoke(self, prompt: str, job_description: Optional[str] = None) -> AgentResponse:
+    async def invoke(self, prompt: str, history: List[Message] = None) -> AgentResponse:
         """
         Main entry point for agent execution, implementing the abstract method.
 
         Args:
             prompt: The prompt to guide the analysis
-            job_description: Optional job description for ATS analysis
+            history: Optional conversation history for context
 
         Returns:
             Standardized AgentResponse
@@ -148,7 +149,8 @@ class ResumeEnhancementAgent(ReActAgent):
             # Initialize state
             initial_state = {
                 "prompt": prompt,
-                "job_description": job_description,
+                "job_description": "",
+                "conversation_history": history or [],
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
@@ -165,6 +167,74 @@ class ResumeEnhancementAgent(ReActAgent):
                 error=str(e),
                 metadata={"agent_type": "resume_enhancer", "error_type": type(e).__name__}
             )
+
+    def think(self, state: EnhancementState) -> Dict[str, Any]:
+        """
+        Assistant node that evaluates the current state and executes the next required tool
+        based on the user's request, not necessarily in sequence.
+        Extends the think method from ReActAgent.
+        """
+        prompt = state.get("prompt", "")
+        conversation_history = state.get("conversation_history", [])
+
+        # Create a new state dictionary, preserving all existing fields
+        new_state = dict(state)
+
+        # Transfer all tracked fields from current state to new state
+        messages = state.get("messages", [])
+        if messages:
+            last_message = messages[-1]
+            if hasattr(last_message, 'tool_call_id'):
+                try:
+                    # Try to parse content as JSON if it's a tool response
+                    content = json.loads(last_message.content)
+                    # Update any matching metadata fields from the content
+                    for field in self.METADATA_FIELDS:
+                        if field in content:
+                            new_state[field] = content[field]
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+
+        # Prepare history context from recent conversation
+        history_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            # Get last 4 messages for context
+            recent_messages = conversation_history[-4:]
+            history_context = "\n".join([
+                f"{msg.role}: {msg.content}" for msg in recent_messages
+            ])
+            history_context = f"\n**CONVERSATION HISTORY**:\n{history_context}\n"
+
+        sys_msg = SystemMessage(
+            content=(
+                "You are a resume enhancement assistant focused on targeted analysis. "
+                "Choose tools based on what the user is specifically asking for. "
+                "You can call any tool directly based on what's needed. "
+                "Consider the recent conversation history when responding to keep context."
+                "\n\n"
+                f"User Prompt: {prompt}"
+                f"{history_context if history_context else ''}"
+            )
+        )
+
+        messages: list[BaseMessage] = [sys_msg] + state.get("messages", [])
+
+        if not messages[-1].content.startswith("Here is a candidate's resume"):
+            messages.append(
+                HumanMessage(
+                    content=(
+                        f"Here is a candidate's resume:\n{self.resume_text}\n\n"
+                        "Based on the user's request and conversation history, choose the appropriate tool(s) to execute. "
+                        "You don't need to run all tools - only what's directly relevant to the request."
+                        "Maintain context from previous interactions when suggesting improvements."
+                    )
+                )
+            )
+
+        # Use the llm_with_tools from ReActAgent parent class
+        invocation = self.llm_with_tools.invoke(messages)
+        new_state["messages"] = messages + [invocation]
+        return new_state
 
     def _extract_answer(self, state: Dict[str, Any]) -> str:
         """
@@ -368,59 +438,3 @@ class ResumeEnhancementAgent(ReActAgent):
             return {"content_quality": quality_assessment}
 
         return content_quality_tool
-
-    def think(self, state: EnhancementState) -> Dict[str, Any]:
-        """
-        Assistant node that evaluates the current state and executes the next required tool
-        based on the user's request, not necessarily in sequence.
-        Extends the think method from ReActAgent.
-        """
-        prompt = state.get("prompt", "")
-        job_description = state.get("job_description", "")
-
-        # Create a new state dictionary, preserving all existing fields
-        new_state = dict(state)
-
-        # Transfer all tracked fields from current state to new state
-        messages = state.get("messages", [])
-        if messages:
-            last_message = messages[-1]
-            if hasattr(last_message, 'tool_call_id'):
-                try:
-                    # Try to parse content as JSON if it's a tool response
-                    content = json.loads(last_message.content)
-                    # Update any matching metadata fields from the content
-                    for field in self.METADATA_FIELDS:
-                        if field in content:
-                            new_state[field] = content[field]
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-
-        sys_msg = SystemMessage(
-            content=(
-                "You are a resume enhancement assistant focused on targeted analysis. "
-                "Choose tools based on what the user is specifically asking for. "
-                "You can call any tool directly based on what's needed. "
-                "\n\n"
-                f"User Prompt: {prompt}"
-            )
-        )
-
-        messages: list[BaseMessage] = [sys_msg] + state.get("messages", [])
-
-        if not messages[-1].content.startswith("Here is a candidate's resume"):
-            messages.append(
-                HumanMessage(
-                    content=(
-                        f"Here is a candidate's resume:\n{self.resume_text}\n\n"
-                        f"Job description (if provided): {job_description}\n\n"
-                        "Based on the user's request, choose the appropriate tool(s) to execute. "
-                        "You don't need to run all tools - only what's directly relevant to the request."
-                    )
-                )
-            )
-
-        # Use the llm_with_tools from ReActAgent parent class
-        invocation = self.llm_with_tools.invoke(messages)
-        new_state["messages"] = messages + [invocation]
-        return new_state
